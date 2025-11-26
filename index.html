@@ -961,6 +961,10 @@
                     const found = users.find(u => u.username.toLowerCase() === loginUsername.toLowerCase() && u.pin === hashedPinAttempt);
                     
                     if (found) {
+                        if (loginBranch === 'ALL' && found.role !== 'admin') {
+                            setModal({ isOpen: true, type: 'alert', title: 'Access Denied', message: 'Only Admin users can access the Owner View.', onConfirm: closeModal, confirmColor: 'red' });
+                            return;
+                        }
                         setUser({ ...found, currentBranch: loginBranch });
                         setLoginUsername(''); setLoginPin(''); setLoginBranch(''); setView('dashboard');
                     } else {
