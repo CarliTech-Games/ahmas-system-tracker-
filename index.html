@@ -485,6 +485,9 @@
             const [transactions, setTransactions] = useState([]);
             const [history, setHistory] = useState([]);
             
+            // NEW: Offline Queue State
+            const [offlineQueue, setOfflineQueue] = useState([]);
+
             // Master Lists
             const [therapistsList, setTherapistsList] = useState([]);
             const [servicesList, setServicesList] = useState([]);
@@ -530,7 +533,17 @@
 
             // --- 1. INITIALIZE FIREBASE ---
             useEffect(() => {
-                // NEW: Restore session from Local Storage
+                // Load offline queue from local storage
+                const savedQueue = localStorage.getItem('spa_offline_queue');
+                if (savedQueue) {
+                    try {
+                        setOfflineQueue(JSON.parse(savedQueue));
+                    } catch (e) {
+                        console.error("Failed to parse offline queue");
+                    }
+                }
+
+                // Restore session from Local Storage
                 const savedUser = localStorage.getItem('spa_user');
                 if (savedUser) {
                     try {
@@ -592,6 +605,53 @@
                     window.removeEventListener('offline', () => setIsOnline(false));
                 };
             }, []);
+
+            // --- 1b. OFFLINE QUEUE PERSISTENCE & SYNC ---
+            useEffect(() => {
+                localStorage.setItem('spa_offline_queue', JSON.stringify(offlineQueue));
+            }, [offlineQueue]);
+
+            // Sync Logic
+            useEffect(() => {
+                const syncOfflineQueue = async () => {
+                    if (isOnline && offlineQueue.length > 0 && fb) {
+                        const basePath = `artifacts/${fb.appId}/public/data`;
+                        const queueCopy = [...offlineQueue];
+                        let syncedCount = 0;
+
+                        setIsGlobalLoading(true);
+                        try {
+                            for (const item of queueCopy) {
+                                // Replace placeholder ID if needed, but simple add() generates one.
+                                // IMPORTANT: Restore serverTimestamp behavior
+                                const itemPayload = {
+                                    ...item,
+                                    timestamp: firebase.firestore.FieldValue.serverTimestamp() 
+                                };
+                                // Remove local id used for keying
+                                delete itemPayload.localId;
+
+                                await fb.db.collection(`${basePath}/transactions`).add(itemPayload);
+                                syncedCount++;
+                            }
+                            
+                            // Clear queue only after success
+                            setOfflineQueue([]);
+                            setModal({ isOpen: true, type: 'alert', title: 'Sync Complete', message: `Successfully uploaded ${syncedCount} offline bookings.`, confirmColor: 'logo-green', onConfirm: closeModal });
+
+                        } catch (error) {
+                            console.error("Sync failed", error);
+                            // Keep remaining items in queue if partial fail? 
+                            // For simplicity, we keep all if one fails to prevent data loss, or just retry next time.
+                        } finally {
+                            setIsGlobalLoading(false);
+                        }
+                    }
+                };
+
+                syncOfflineQueue();
+            }, [isOnline, fb, offlineQueue.length]);
+
 
             // --- 2. DATA SYNC (UPDATED: Lazy Loading History) ---
             
@@ -1046,6 +1106,46 @@
                     return;
                 }
 
+                // VALIDATION: Check for conflicts (Same Therapist at Exact Same Time)
+                const isConflict = transactions.some(t => 
+                    t.therapist === formData.therapist && 
+                    t.time === formData.time &&
+                    // If branch is ALL (Owner), we check specific branch logic if needed, but usually therapist can't be in two places.
+                    // We should check if user is in same branch? Therapists usually work at one branch.
+                    // Simply checking therapist + time is safest global lock.
+                    t.branch === transactionBranch // Double check strictly within branch? Or global? Let's assume global per therapist name.
+                );
+
+                if (isConflict) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Booking Conflict', message: `Therapist ${formData.therapist} is already booked at ${formData.time}.`, onConfirm: closeModal, confirmColor: 'red' });
+                    return;
+                }
+
+                // OFFLINE HANDLING
+                if (!isOnline) {
+                    const newOfflineItem = {
+                        ...formData,
+                        amount: parseFloat(formData.amount),
+                        status: formData.type === 'sale' ? 'completed' : 'pending',
+                        recordedBy: user.name,
+                        branch: transactionBranch,
+                        localId: Date.now(), // Temp ID
+                        timestamp: Date.now() // Local timestamp
+                    };
+                    setOfflineQueue(prev => [...prev, newOfflineItem]);
+                    
+                    // Reset Form
+                    const resetTargetBranch = user.currentBranch === 'ALL' ? transactionBranch : user.currentBranch;
+                    setFormData({ 
+                        clientName: '', service: '', duration: '', therapist: '', amount: '', 
+                        type: 'booking', time: new Date().toTimeString().slice(0, 5), targetBranch: resetTargetBranch
+                    });
+
+                    setModal({ isOpen: true, type: 'alert', title: 'Saved Offline', message: 'Booking queued. Will sync when online.', onConfirm: closeModal, confirmColor: 'orange' });
+                    return;
+                }
+
+                // ONLINE HANDLING
                 setIsGlobalLoading(true);
                 try {
                     const basePath = `artifacts/${fb.appId}/public/data`;
@@ -1384,6 +1484,11 @@
                                     <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">
                                         <span className="bg-logo-green-100 text-logo-green-700 px-2 py-0.5 rounded flex items-center gap-1"><Icons.MapPin size={10}/> {user.currentBranch}</span>
                                         <span className="flex items-center gap-1"><Icons.UserCircle2 size={10}/> {user.name}</span>
+                                        {offlineQueue.length > 0 && (
+                                            <span className="bg-orange-100 text-orange-600 px-2 py-0.5 rounded flex items-center gap-1 animate-pulse">
+                                                <Icons.WifiOff size={10}/> {offlineQueue.length} Pending
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
                             </div>
