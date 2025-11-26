@@ -1196,6 +1196,32 @@
                 }});
             };
 
+            // NEW: Owner Toggle Role Function
+            const handleToggleRole = (targetUser) => {
+                const newRole = targetUser.role === 'admin' ? 'staff' : 'admin';
+                const action = newRole === 'admin' ? 'Promote' : 'Demote';
+                
+                setModal({
+                    isOpen: true,
+                    type: 'confirm',
+                    title: `${action} Staff?`,
+                    message: `Are you sure you want to change ${targetUser.name}'s role to ${newRole.toUpperCase()}?`,
+                    confirmColor: 'logo-green',
+                    onConfirm: async () => {
+                        closeModal();
+                        setIsGlobalLoading(true);
+                        try {
+                            const basePath = `artifacts/${fb.appId}/public/data`;
+                            await fb.db.collection(`${basePath}/users`).doc(targetUser.id).update({ role: newRole });
+                        } catch (error) {
+                            setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Failed to update role.', confirmColor: 'red', onConfirm: closeModal });
+                        } finally {
+                            setIsGlobalLoading(false);
+                        }
+                    }
+                });
+            };
+
             const handleUpdateProfile = async (e) => {
                 e.preventDefault();
                 
@@ -1561,12 +1587,28 @@
                                             className="p-4 border-b flex justify-between items-center hover:bg-slate-50 transition"
                                         >
                                             <div>
-                                                <h3 className="font-bold">{u.name} {u.username === 'admin' && <span className="text-xs font-mono text-logo-green-700 bg-logo-green-100 px-1 rounded-sm">OWNER</span>}</h3>
+                                                <h3 className="font-bold flex items-center">
+                                                    {u.name} 
+                                                    {u.username === 'admin' && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-logo-green-100 text-logo-green-700 ml-2">OWNER</span>}
+                                                    {u.username !== 'admin' && u.role === 'admin' && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 ml-2">ADMIN</span>}
+                                                    {u.role === 'staff' && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 ml-2">STAFF</span>}
+                                                </h3>
                                                 <p className="text-xs text-slate-400">
                                                     @{u.username} • HASHED PIN
                                                 </p>
                                             </div>
                                             <div className="flex gap-2 items-center">
+                                                {/* Toggle Role Button (Owner Admin only) */}
+                                                {user.username === 'admin' && u.username !== 'admin' && (
+                                                    <button
+                                                        onClick={(e)=>{e.stopPropagation(); handleToggleRole(u);}}
+                                                        className={`p-1 rounded transition ${u.role === 'admin' ? 'text-orange-400 hover:text-orange-600 hover:bg-orange-50' : 'text-blue-400 hover:text-blue-600 hover:bg-blue-50'}`}
+                                                        title={u.role === 'admin' ? "Demote to Staff" : "Promote to Admin"}
+                                                    >
+                                                        {u.role === 'admin' ? <Icons.User size={16}/> : <Icons.ShieldCheck size={16}/>}
+                                                    </button>
+                                                )}
+
                                                 {/* Explicit View/Reset PIN button (Owner Admin only) */}
                                                 {user.username === 'admin' && (
                                                     <button
