@@ -59,6 +59,11 @@
             height: 24px;
             animation: spin 1s linear infinite;
         }
+        .loader-lg {
+            width: 48px;
+            height: 48px;
+            border-width: 5px;
+        }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
@@ -144,7 +149,8 @@
             MapPin: (p) => <Icon name="map-pin" {...p} />,
             Tag: (p) => <Icon name="tag" {...p} />,
             Hourglass: (p) => <Icon name="hourglass" {...p} />,
-            Pencil: (p) => <Icon name="pencil" {...p} />
+            Pencil: (p) => <Icon name="pencil" {...p} />,
+            Loader2: (p) => <Icon name="loader-2" {...p} />
         };
 
         // --- SECURITY HELPER: Hashing Function ---
@@ -162,6 +168,16 @@
                 return null;
             }
         };
+
+        // --- Loading Component ---
+        const LoadingOverlay = ({ message }) => (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm fade-in">
+                <div className="bg-white p-6 rounded-2xl shadow-2xl flex flex-col items-center gap-4 min-w-[200px]">
+                    <div className="loader loader-lg"></div>
+                    <p className="text-slate-600 font-semibold text-sm animate-pulse">{message || 'Processing...'}</p>
+                </div>
+            </div>
+        );
 
 
         // --- List Management Component (Admin Only) ---
@@ -387,7 +403,7 @@
             );
         };
 
-        // --- Admin Reset User Modal (MOVED OUTSIDE APP TO FIX FOCUS/RENDER BUGS) ---
+        // --- Admin Reset User Modal ---
         const AdminResetUserModal = ({ editUserModal, setEditUserModal, handleResetPin }) => {
             if (!editUserModal.isOpen || !editUserModal.user) return null;
 
@@ -452,6 +468,7 @@
             const [isOnline, setIsOnline] = useState(navigator.onLine);
             const [dbReady, setDbReady] = useState(false);
             const [configError, setConfigError] = useState(null); 
+            const [isGlobalLoading, setIsGlobalLoading] = useState(false); // NEW: Global Loading State
 
             const [user, setUser] = useState(null);
             const [users, setUsers] = useState([]);
@@ -815,7 +832,14 @@
                     return;
                 }
 
-                await fb.db.collection(`${basePath}/${collectionName}`).add(data);
+                setIsGlobalLoading(true);
+                try {
+                    await fb.db.collection(`${basePath}/${collectionName}`).add(data);
+                } catch (err) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Failed to add item.', confirmColor: 'red', onConfirm: closeModal });
+                } finally {
+                    setIsGlobalLoading(false);
+                }
             };
 
             const handleDeleteItem = (listType, id, name) => {
@@ -830,8 +854,15 @@
                 setModal({
                     isOpen: true, type: 'confirm', title: `Delete ${listType}?`, message: `Are you sure you want to permanently delete "${name}"?`, confirmColor: 'red',
                     onConfirm: async () => {
-                        await fb.db.collection(`${basePath}/${collectionName}`).doc(id).delete();
-                        closeModal();
+                        closeModal(); // Close confirm modal first
+                        setIsGlobalLoading(true);
+                        try {
+                            await fb.db.collection(`${basePath}/${collectionName}`).doc(id).delete();
+                        } catch (error) {
+                            setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Deletion failed.', confirmColor: 'red', onConfirm: closeModal });
+                        } finally {
+                            setIsGlobalLoading(false);
+                        }
                     }
                 });
             };
@@ -844,12 +875,15 @@
                 else return;
 
                 const basePath = `artifacts/${fb.appId}/public/data`;
+                setIsGlobalLoading(true);
                 try {
                     await fb.db.collection(`${basePath}/${collectionName}`).doc(id).update(updatedData);
                     setModal({ isOpen: true, type: 'alert', title: 'Success', message: 'Item updated successfully.', onConfirm: closeModal, confirmColor: 'logo-green' });
                 } catch (error) {
                     console.error("Update error:", error);
                     setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Failed to update item.', onConfirm: closeModal, confirmColor: 'red' });
+                } finally {
+                    setIsGlobalLoading(false);
                 }
             };
 
@@ -860,9 +894,16 @@
                  setModal({
                     isOpen: true, type: 'confirm', title: `Delete Report?`, message: `Are you sure you want to permanently delete the archived report for ${date}? This action cannot be undone.`, confirmColor: 'red',
                     onConfirm: async () => {
-                        const basePath = `artifacts/${fb.appId}/public/data`;
-                        await fb.db.collection(`${basePath}/history`).doc(id).delete();
                         closeModal();
+                        setIsGlobalLoading(true);
+                        try {
+                            const basePath = `artifacts/${fb.appId}/public/data`;
+                            await fb.db.collection(`${basePath}/history`).doc(id).delete();
+                        } catch (err) {
+                            setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Could not delete history.', confirmColor: 'red', onConfirm: closeModal });
+                        } finally {
+                            setIsGlobalLoading(false);
+                        }
                     }
                 });
             };
@@ -875,19 +916,26 @@
                     return;
                 }
                 
-                const hashedPinAttempt = await hashPin(loginPin);
-                if (!hashedPinAttempt) {
-                    setModal({ isOpen: true, type: 'alert', title: 'Login Error', message: 'PIN must be at least 4 digits.', onConfirm: closeModal, confirmColor: 'red' });
-                    return;
-                }
+                setIsGlobalLoading(true);
+                try {
+                    const hashedPinAttempt = await hashPin(loginPin);
+                    if (!hashedPinAttempt) {
+                        setModal({ isOpen: true, type: 'alert', title: 'Login Error', message: 'PIN must be at least 4 digits.', onConfirm: closeModal, confirmColor: 'red' });
+                        return;
+                    }
 
-                const found = users.find(u => u.username.toLowerCase() === loginUsername.toLowerCase() && u.pin === hashedPinAttempt);
-                
-                if (found) {
-                    setUser({ ...found, currentBranch: loginBranch });
-                    setLoginUsername(''); setLoginPin(''); setLoginBranch(''); setView('dashboard');
-                } else {
-                    setModal({ isOpen: true, type: 'alert', title: 'Login Failed', message: 'Check credentials.', onConfirm: closeModal, confirmColor: 'red' });
+                    const found = users.find(u => u.username.toLowerCase() === loginUsername.toLowerCase() && u.pin === hashedPinAttempt);
+                    
+                    if (found) {
+                        setUser({ ...found, currentBranch: loginBranch });
+                        setLoginUsername(''); setLoginPin(''); setLoginBranch(''); setView('dashboard');
+                    } else {
+                        setModal({ isOpen: true, type: 'alert', title: 'Login Failed', message: 'Check credentials.', onConfirm: closeModal, confirmColor: 'red' });
+                    }
+                } catch (err) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Login processing error.', onConfirm: closeModal, confirmColor: 'red' });
+                } finally {
+                    setIsGlobalLoading(false);
                 }
             };
 
@@ -947,38 +995,53 @@
                     return;
                 }
 
-                const basePath = `artifacts/${fb.appId}/public/data`;
-                await fb.db.collection(`${basePath}/transactions`).add({
-                    ...formData,
-                    amount: parseFloat(formData.amount),
-                    status: formData.type === 'sale' ? 'completed' : 'pending',
-                    recordedBy: user.name,
-                    branch: transactionBranch, 
-                    timestamp: Date.now()
-                });
+                setIsGlobalLoading(true);
+                try {
+                    const basePath = `artifacts/${fb.appId}/public/data`;
+                    await fb.db.collection(`${basePath}/transactions`).add({
+                        ...formData,
+                        amount: parseFloat(formData.amount),
+                        status: formData.type === 'sale' ? 'completed' : 'pending',
+                        recordedBy: user.name,
+                        branch: transactionBranch, 
+                        timestamp: Date.now()
+                    });
 
-                const resetTargetBranch = user.currentBranch === 'ALL' ? transactionBranch : user.currentBranch;
-                
-                setFormData({ 
-                    clientName: '', 
-                    service: '', 
-                    duration: '',
-                    therapist: '', 
-                    amount: '', 
-                    type: 'booking', 
-                    time: new Date().toTimeString().slice(0, 5),
-                    targetBranch: resetTargetBranch
-                });
-                
-                setModal({ isOpen: true, type: 'alert', title: 'Booking Saved!', message: `${formData.clientName} recorded for ${transactionBranch}.`, onConfirm: closeModal, confirmColor: 'logo-green' });
+                    const resetTargetBranch = user.currentBranch === 'ALL' ? transactionBranch : user.currentBranch;
+                    
+                    setFormData({ 
+                        clientName: '', 
+                        service: '', 
+                        duration: '',
+                        therapist: '', 
+                        amount: '', 
+                        type: 'booking', 
+                        time: new Date().toTimeString().slice(0, 5),
+                        targetBranch: resetTargetBranch
+                    });
+                    
+                    setModal({ isOpen: true, type: 'alert', title: 'Booking Saved!', message: `${formData.clientName} recorded for ${transactionBranch}.`, onConfirm: closeModal, confirmColor: 'logo-green' });
 
-                setView('dashboard');
+                    setView('dashboard');
+                } catch (error) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Failed to save booking. Please check connection.', onConfirm: closeModal, confirmColor: 'red' });
+                } finally {
+                    setIsGlobalLoading(false);
+                }
             };
 
             const toggleStatus = async (t) => {
                 const basePath = `artifacts/${fb.appId}/public/data`;
                 const newStatus = t.status === 'pending' ? 'completed' : 'pending';
-                await fb.db.collection(`${basePath}/transactions`).doc(t.id).update({ status: newStatus });
+                // Optimistic or silent update is usually fine here, but let's wrap for safety if requested
+                setIsGlobalLoading(true);
+                try {
+                    await fb.db.collection(`${basePath}/transactions`).doc(t.id).update({ status: newStatus });
+                } catch(err) {
+                    console.error("Status toggle failed");
+                } finally {
+                    setIsGlobalLoading(false);
+                }
             };
 
             const requestDelete = (id) => {
@@ -989,9 +1052,16 @@
                 setModal({
                     isOpen: true, type: 'confirm', title: 'Delete Record?', message: 'Permanently remove from cloud?', confirmColor: 'red',
                     onConfirm: async () => {
-                        const basePath = `artifacts/${fb.appId}/public/data`;
-                        await fb.db.collection(`${basePath}/transactions`).doc(id).delete();
                         closeModal();
+                        setIsGlobalLoading(true);
+                        try {
+                            const basePath = `artifacts/${fb.appId}/public/data`;
+                            await fb.db.collection(`${basePath}/transactions`).doc(id).delete();
+                        } catch(err) {
+                            setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Delete failed.', confirmColor: 'red', onConfirm: closeModal });
+                        } finally {
+                            setIsGlobalLoading(false);
+                        }
                     }
                 });
             };
@@ -1009,25 +1079,32 @@
                 setModal({
                     isOpen: true, type: 'confirm', title: 'End Day & Sync?', message: `Save ${user.currentBranch} report to history and clear board?`, confirmColor: 'logo-green',
                     onConfirm: async () => {
-                        const basePath = `artifacts/${fb.appId}/public/data`;
-                        const historyColl = fb.db.collection(`${basePath}/history`);
-                        const transColl = fb.db.collection(`${basePath}/transactions`);
-
-                        await historyColl.add({
-                            date: new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
-                            timestamp: new Date().toLocaleString(),
-                            timestamp_val: Date.now(),
-                            transactions: filteredTransactions,
-                            stats: stats,
-                            branch: user.currentBranch,
-                            closedBy: user.name
-                        });
-
-                        const deletePromises = filteredTransactions.map(t => transColl.doc(t.id).delete());
-                        await Promise.all(deletePromises);
-
-                        setView('history');
                         closeModal();
+                        setIsGlobalLoading(true);
+                        try {
+                            const basePath = `artifacts/${fb.appId}/public/data`;
+                            const historyColl = fb.db.collection(`${basePath}/history`);
+                            const transColl = fb.db.collection(`${basePath}/transactions`);
+
+                            await historyColl.add({
+                                date: new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+                                timestamp: new Date().toLocaleString(),
+                                timestamp_val: Date.now(),
+                                transactions: filteredTransactions,
+                                stats: stats,
+                                branch: user.currentBranch,
+                                closedBy: user.name
+                            });
+
+                            const deletePromises = filteredTransactions.map(t => transColl.doc(t.id).delete());
+                            await Promise.all(deletePromises);
+
+                            setView('history');
+                        } catch (err) {
+                            setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Failed to end day. Data preserved.', confirmColor: 'red', onConfirm: closeModal });
+                        } finally {
+                            setIsGlobalLoading(false);
+                        }
                     }
                 });
             };
@@ -1037,20 +1114,27 @@
                 e.preventDefault();
                 if (!newUser.name || !newUser.username || !newUser.pin) return;
                 
-                const hashedPin = await hashPin(newUser.pin);
-                if (!hashedPin) {
-                    setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'PIN hashing failed. Check PIN length.', onConfirm: closeModal, confirmColor: 'red' });
-                    return;
-                }
+                setIsGlobalLoading(true);
+                try {
+                    const hashedPin = await hashPin(newUser.pin);
+                    if (!hashedPin) {
+                        setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'PIN hashing failed. Check PIN length.', onConfirm: closeModal, confirmColor: 'red' });
+                        return;
+                    }
 
-                if (users.some(u => u.username.toLowerCase() === newUser.username.toLowerCase())) { 
-                    setModal({ isOpen: true, type: 'alert', title: 'Username Taken', message: 'This username is already in use.', onConfirm: closeModal, confirmColor: 'red' });
-                    return; 
+                    if (users.some(u => u.username.toLowerCase() === newUser.username.toLowerCase())) { 
+                        setModal({ isOpen: true, type: 'alert', title: 'Username Taken', message: 'This username is already in use.', onConfirm: closeModal, confirmColor: 'red' });
+                        return; 
+                    }
+                    
+                    const basePath = `artifacts/${fb.appId}/public/data`;
+                    await fb.db.collection(`${basePath}/users`).add({ ...newUser, pin: hashedPin });
+                    setNewUser({ name: '', username: '', pin: '', role: 'staff' });
+                } catch(err) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Failed to add user.', confirmColor: 'red', onConfirm: closeModal });
+                } finally {
+                    setIsGlobalLoading(false);
                 }
-                
-                const basePath = `artifacts/${fb.appId}/public/data`;
-                await fb.db.collection(`${basePath}/users`).add({ ...newUser, pin: hashedPin });
-                setNewUser({ name: '', username: '', pin: '', role: 'staff' });
             };
 
             const handleDeleteUser = (id) => {
@@ -1059,9 +1143,16 @@
                     return; 
                 }
                 setModal({ isOpen: true, type: 'confirm', title: 'Remove Staff?', message: 'Revoke access for this user?', confirmColor: 'red', onConfirm: async () => { 
-                    const basePath = `artifacts/${fb.appId}/public/data`;
-                    await fb.db.collection(`${basePath}/users`).doc(id).delete(); 
-                    closeModal(); 
+                    closeModal();
+                    setIsGlobalLoading(true);
+                    try {
+                        const basePath = `artifacts/${fb.appId}/public/data`;
+                        await fb.db.collection(`${basePath}/users`).doc(id).delete(); 
+                    } catch(err) {
+                        setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Failed to delete user.', confirmColor: 'red', onConfirm: closeModal });
+                    } finally {
+                        setIsGlobalLoading(false);
+                    }
                 }});
             };
 
@@ -1071,26 +1162,33 @@
                 const newPin = profileData.pin;
                 const updateData = { username: profileData.username };
 
-                if (newPin && newPin.length > 0) {
-                    const hashedPin = await hashPin(newPin);
-                      if (!hashedPin) {
-                        setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'New PIN hashing failed. Check PIN length.', onConfirm: closeModal, confirmColor: 'red' });
-                        return;
+                setIsGlobalLoading(true);
+                try {
+                    if (newPin && newPin.length > 0) {
+                        const hashedPin = await hashPin(newPin);
+                        if (!hashedPin) {
+                            setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'New PIN hashing failed. Check PIN length.', onConfirm: closeModal, confirmColor: 'red' });
+                            return;
+                        }
+                        updateData.pin = hashedPin;
                     }
-                    updateData.pin = hashedPin;
-                }
 
-                if (users.some(u => u.username.toLowerCase() === profileData.username.toLowerCase() && u.id !== user.id)) { 
-                    setModal({ isOpen: true, type: 'alert', title: 'Username Taken', message: 'This username is already in use by another staff.', onConfirm: closeModal, confirmColor: 'red' });
-                    return; 
+                    if (users.some(u => u.username.toLowerCase() === profileData.username.toLowerCase() && u.id !== user.id)) { 
+                        setModal({ isOpen: true, type: 'alert', title: 'Username Taken', message: 'This username is already in use by another staff.', onConfirm: closeModal, confirmColor: 'red' });
+                        return; 
+                    }
+                    
+                    const basePath = `artifacts/${fb.appId}/public/data`;
+                    await fb.db.collection(`${basePath}/users`).doc(user.id).update(updateData);
+                    
+                    const updatedUser = { ...user, ...updateData };
+                    setUser(updatedUser);
+                    setModal({ isOpen: true, type: 'alert', title: 'Updated', message: 'Credentials synced.', onConfirm: closeModal, confirmColor: 'logo-green' });
+                } catch (err) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Failed to update profile.', confirmColor: 'red', onConfirm: closeModal });
+                } finally {
+                    setIsGlobalLoading(false);
                 }
-                
-                const basePath = `artifacts/${fb.appId}/public/data`;
-                await fb.db.collection(`${basePath}/users`).doc(user.id).update(updateData);
-                
-                const updatedUser = { ...user, ...updateData };
-                setUser(updatedUser);
-                setModal({ isOpen: true, type: 'alert', title: 'Updated', message: 'Credentials synced.', onConfirm: closeModal, confirmColor: 'logo-green' });
             };
             
             const handleResetPin = async (e) => {
@@ -1103,22 +1201,24 @@
                     return;
                 }
                 
-                const hashedPin = await hashPin(newPin);
-                if (!hashedPin) {
-                    setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'PIN hashing failed.', onConfirm: closeModal, confirmColor: 'red' });
-                    return;
-                }
-
+                setIsGlobalLoading(true);
                 try {
+                    const hashedPin = await hashPin(newPin);
+                    if (!hashedPin) {
+                        setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'PIN hashing failed.', onConfirm: closeModal, confirmColor: 'red' });
+                        return;
+                    }
+
                     const basePath = `artifacts/${fb.appId}/public/data`;
                     await fb.db.collection(`${basePath}/users`).doc(targetUser.id).update({ pin: hashedPin });
                     
-                    setModal({ isOpen: true, type: 'alert', title: 'Success', message: `${targetUser.name}'s PIN has been reset.`, onConfirm: () => {
-                        setEditUserModal({ isOpen: false, user: null, newPin: '' });
-                        closeModal();
-                    }, confirmColor: 'logo-green' });
+                    // Close modal and show success
+                    setEditUserModal({ isOpen: false, user: null, newPin: '' });
+                    setModal({ isOpen: true, type: 'alert', title: 'Success', message: `${targetUser.name}'s PIN has been reset.`, onConfirm: closeModal, confirmColor: 'logo-green' });
                 } catch (error) {
                     setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Failed to update PIN: ' + error.message, onConfirm: closeModal, confirmColor: 'red' });
+                } finally {
+                    setIsGlobalLoading(false);
                 }
             };
 
@@ -1147,7 +1247,7 @@
             // LOGIN SCREEN
             if (!user) {
                 return (
-                    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 fade-in">
+                    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 fade-in relative">
                         <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-sm border border-logo-green-100 text-center relative overflow-hidden">
                             <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-logo-green-700 to-teal-600"></div>
                             <div className="w-20 h-20 bg-logo-green-50 rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm border border-logo-green-100">
@@ -1174,6 +1274,7 @@
                             {!isOnline && <p className="mt-4 text-xs text-red-400 flex items-center justify-center gap-1"><Icons.WifiOff size={12}/> You are offline</p>}
                         </div>
                         {modal.isOpen && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60"><div className="bg-white rounded-xl p-6 max-w-sm"><h3 className="font-bold mb-2">{modal.title}</h3><p className="mb-4 text-sm">{modal.message}</p><div className="flex gap-2 justify-end">{modal.type==='confirm'&&<button onClick={closeModal} className="px-4 py-2 text-slate-500">Cancel</button>}<button onClick={modal.onConfirm||closeModal} className={`px-4 py-2 rounded text-white ${modal.confirmColor==='red'?'bg-red-500':'bg-logo-green-600'}`}>Okay</button></div></div></div>}
+                        {isGlobalLoading && <LoadingOverlay message="Verifying..." />}
                     </div>
                 );
             }
@@ -1493,6 +1594,9 @@
 
                         {/* Global Modal */}
                         {modal.isOpen && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60"><div className="bg-white rounded-xl p-6 max-w-sm"><h3 className="font-bold mb-2">{modal.title}</h3><p className="mb-4 text-sm">{modal.message}</p><div className="flex gap-2 justify-end">{modal.type==='confirm'&&<button onClick={closeModal} className="px-4 py-2 text-slate-500">Cancel</button>}<button onClick={modal.onConfirm||closeModal} className={`px-4 py-2 rounded text-white ${modal.confirmColor==='red'?'bg-red-500':'bg-logo-green-600'}`}>Okay</button></div></div></div>}
+                        
+                        {/* Loading Overlay */}
+                        {isGlobalLoading && <LoadingOverlay message="Processing..." />}
                     </main>
                     {view === 'dashboard' && <button onClick={()=>setView('add')} className="fixed bottom-6 right-6 bg-logo-green-700 text-white p-4 rounded-full shadow-lg hover:scale-105 transition-transform"><Icons.Plus size={28}/></button>}
 
