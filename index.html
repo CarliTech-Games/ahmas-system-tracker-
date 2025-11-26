@@ -490,7 +490,8 @@
             // --- RENDER HELPERS ---
             if (configError) return <div className="h-screen flex items-center justify-center bg-slate-100 p-4 text-center"><div className="bg-white p-6 rounded shadow"><Icons.Cloud size={40} className="mx-auto mb-2 text-red-400"/><h2 className="font-bold">Setup Error</h2><p className="text-sm text-slate-500 font-mono bg-slate-50 p-2 rounded border mt-2">{configError}</p></div></div>;
             
-            if (!dbReady && !user) return <div className="h-screen flex flex-col items-center justify-center"><div className="loader mb-2"></div><p className="text-xs text-slate-400">Secure Connection...</p></div>;
+            // FIX: Only wait for Firebase (fb) to initialize, do not wait for dbReady before login
+            if (!fb) return <div className="h-screen flex flex-col items-center justify-center"><div className="loader mb-2"></div><p className="text-xs text-slate-400">Secure Connection...</p></div>;
 
             // --- LOGIN VIEW ---
             if (!user) return (
