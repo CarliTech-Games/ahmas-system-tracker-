@@ -766,6 +766,22 @@
                 return () => unsub();
             }, [fb, fbUser, view]); // Re-run when view changes
 
+            // --- 2c. REAL-TIME USER ROLE SYNC ---
+            // Ensure that if the Admin changes my role while I'm logged in, I see the changes immediately.
+            useEffect(() => {
+                if (user && users.length > 0) {
+                    const freshData = users.find(u => u.id === user.id);
+                    if (freshData) {
+                        // Check if relevant fields changed (role, name, username)
+                        if (freshData.role !== user.role || freshData.name !== user.name || freshData.username !== user.username) {
+                            const updatedUser = { ...freshData, currentBranch: user.currentBranch };
+                            setUser(updatedUser);
+                            localStorage.setItem('spa_user', JSON.stringify(updatedUser));
+                        }
+                    }
+                }
+            }, [users, user]);
+
 
             // --- 3. HELPERS ---
             
@@ -1107,13 +1123,16 @@
                 }
 
                 // VALIDATION: Check for conflicts (Same Therapist at Exact Same Time)
-                const isConflict = transactions.some(t => 
+                // We need to check BOTH transactions (synced) AND offlineQueue (unsynced)
+                const allBookings = [...transactions, ...offlineQueue];
+                
+                const isConflict = allBookings.some(t => 
                     t.therapist === formData.therapist && 
                     t.time === formData.time &&
-                    // If branch is ALL (Owner), we check specific branch logic if needed, but usually therapist can't be in two places.
-                    // We should check if user is in same branch? Therapists usually work at one branch.
-                    // Simply checking therapist + time is safest global lock.
-                    t.branch === transactionBranch // Double check strictly within branch? Or global? Let's assume global per therapist name.
+                    // Assuming therapists are branch-agnostic for validation (they can't be in two places at once)
+                    // OR if strict branch validation is needed: t.branch === transactionBranch
+                    // For safety, we assume global locking per therapist.
+                    true
                 );
 
                 if (isConflict) {
