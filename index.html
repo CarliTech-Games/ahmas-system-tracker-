@@ -530,6 +530,17 @@
 
             // --- 1. INITIALIZE FIREBASE ---
             useEffect(() => {
+                // NEW: Restore session from Local Storage
+                const savedUser = localStorage.getItem('spa_user');
+                if (savedUser) {
+                    try {
+                        setUser(JSON.parse(savedUser));
+                    } catch (e) {
+                        console.error("Failed to parse saved user", e);
+                        localStorage.removeItem('spa_user');
+                    }
+                }
+
                 const initFirebase = async () => {
                     if (!firebaseConfig || !firebaseConfig.projectId) {
                         setConfigError("Firebase configuration is incomplete. Please check the firebaseConfig object.");
@@ -965,7 +976,9 @@
                             setModal({ isOpen: true, type: 'alert', title: 'Access Denied', message: 'Only the Owner Admin can access the All Branches view.', onConfirm: closeModal, confirmColor: 'red' });
                             return;
                         }
-                        setUser({ ...found, currentBranch: loginBranch });
+                        const loggedUser = { ...found, currentBranch: loginBranch };
+                        setUser(loggedUser);
+                        localStorage.setItem('spa_user', JSON.stringify(loggedUser)); // NEW: Save to local storage
                         setLoginUsername(''); setLoginPin(''); setLoginBranch(''); setView('dashboard');
                     } else {
                         setModal({ isOpen: true, type: 'alert', title: 'Login Failed', message: 'Check credentials.', onConfirm: closeModal, confirmColor: 'red' });
@@ -1261,6 +1274,7 @@
                     
                     const updatedUser = { ...user, ...updateData };
                     setUser(updatedUser);
+                    localStorage.setItem('spa_user', JSON.stringify(updatedUser)); // NEW: Update local storage too
                     setModal({ isOpen: true, type: 'alert', title: 'Updated', message: 'Credentials synced.', onConfirm: closeModal, confirmColor: 'logo-green' });
                 } catch (err) {
                     setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Failed to update profile.', confirmColor: 'red', onConfirm: closeModal });
@@ -1373,7 +1387,11 @@
                                     </div>
                                 </div>
                             </div>
-                            <button onClick={()=>{setUser(null); setView('dashboard');}} className="p-2 text-slate-400 hover:text-red-500 rounded-lg"><Icons.LogOut size={20}/></button>
+                            <button onClick={()=>{
+                                setUser(null);
+                                localStorage.removeItem('spa_user');
+                                setView('dashboard');
+                            }} className="p-2 text-slate-400 hover:text-red-500 rounded-lg"><Icons.LogOut size={20}/></button>
                         </div>
                         {!isOnline && <div className="bg-red-500 text-white text-xs text-center py-1">No Internet - Sync Paused</div>}
                     </header>
