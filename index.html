@@ -19,21 +19,30 @@
     <script src="https://unpkg.com/lucide@latest"></script>
 
     <!-- 5. Firebase (Compat Version - CDN for single-file operation) -->
+    <!-- UPDATED to v12.6.0 CDN -->
     <script src="https://www.gstatic.com/firebasejs/12.6.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/12.6.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore-compat.js"></script>
 
     <!-- 6. Custom Tailwind Config and Styles -->
     <script>
+        // Custom Tailwind Configuration to use the Logo's Primary Green (#008000)
         tailwind.config = {
             theme: {
                 extend: {
                     colors: {
                         'logo-green': {
-                            50: '#E6FFE6', 100: '#CCFFCC', 500: '#00B300',
-                            600: '#009900', 700: '#008000', 800: '#006600', 900: '#004C00',
+                            50: '#E6FFE6',      // Very light background
+                            100: '#CCFFCC',     // Light background
+                            500: '#00B300',     // Medium
+                            600: '#009900',     // Primary Button Hover
+                            700: '#008000',     // Base Logo Green / Primary
+                            800: '#006600',     // Darker text/header
+                            900: '#004C00',     // Deepest text
                         },
-                        'teal': { 600: '#008080' }
+                        'teal': {
+                            600: '#008080', // Keep some teal accent for contrast
+                        }
                     }
                 }
             }
@@ -46,12 +55,17 @@
         .loader {
             border: 3px solid #f3f3f3;
             border-radius: 50%;
-            border-top: 3px solid #008000;
-            width: 20px;
-            height: 20px;
+            border-top: 3px solid #008000; /* Use logo-green */
+            width: 24px;
+            height: 24px;
             animation: spin 1s linear infinite;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .logo-img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -62,8 +76,16 @@
         const { useState, useEffect, useRef, useMemo } = React;
 
         // --- CONSTANTS ---
-        const BRANCHES = ['Guadalupe', 'Mabolo', 'Talisay', 'Bacayan', 'Lapu-lapu', 'AS Fortuna'];
+        const BRANCHES = [
+            'Guadalupe', 
+            'Mabolo', 
+            'Talisay', 
+            'Bacayan', 
+            'Lapu-lapu', 
+            'AS Fortuna'
+        ];
         
+        // --- FIREBASE CONFIGURATION (CUSTOMIZABLE FOR EXTERNAL DEPLOYMENT) ---
         const MANUAL_FIREBASE_CONFIG = {
             apiKey: "AIzaSyAKXcZwKtFBRFvGbOKd0UnQrLuOLt7wV9M",
             authDomain: "ahmas-tracker.firebaseapp.com",
@@ -76,6 +98,7 @@
         
         const firebaseConfig = MANUAL_FIREBASE_CONFIG; 
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
 
         // --- ICON COMPONENT ---
         const Icon = ({ name, size = 24, className = "", ...props }) => {
@@ -127,571 +150,1431 @@
             MapPin: (p) => <Icon name="map-pin" {...p} />,
             Tag: (p) => <Icon name="tag" {...p} />,
             Hourglass: (p) => <Icon name="hourglass" {...p} />,
-            Pencil: (p) => <Icon name="pencil" {...p} />,
-            RotateCw: (p) => <Icon name="rotate-cw" {...p} />
+            Pencil: (p) => <Icon name="pencil" {...p} />
         };
 
-        // --- SECURITY HELPER: SHA-256 Hashing ---
+        // --- SECURITY HELPER: Hashing Function ---
         const hashPin = async (pin) => {
             if (!pin || pin.length < 4) return null;
             try {
+                // Use subtle crypto for SHA-256 hashing
                 const msgUint8 = new TextEncoder().encode(pin);
                 const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
                 const hashArray = Array.from(new Uint8Array(hashBuffer));
-                return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-            } catch (error) { console.error("Hashing failed:", error); return null; }
+                const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                return hashHex;
+            } catch (error) {
+                console.error("Hashing failed:", error);
+                return null;
+            }
         };
 
-        // --- DATE HELPER: Handle Firestore Timestamp or Number ---
-        const safeDate = (timestamp) => {
-            if (!timestamp) return null;
-            // Firestore Timestamp has .toDate(), legacy might be number
-            if (typeof timestamp.toDate === 'function') return timestamp.toDate();
-            return new Date(timestamp);
-        };
 
-        const formatCurrency = (val) => {
-            if (val === undefined || val === null || val === '') return '';
-            return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(val);
-        };
-
-        // --- COMPONENT: LIST MANAGEMENT (Optimized) ---
+        // --- List Management Component (Admin Only) ---
         const ListManagement = ({ therapists, services, durations, onAdd, onDelete, onEdit }) => {
             const [activeTab, setActiveTab] = useState('therapist'); 
+            
+            // Add State
             const [newItemName, setNewItemName] = useState('');
+            // Service Prices: Map { "60 Mins": 450, "90 Mins": 675 }
             const [newItemPrices, setNewItemPrices] = useState({}); 
+            
+            // Edit State
             const [editingId, setEditingId] = useState(null);
             const [editName, setEditName] = useState('');
             const [editPrices, setEditPrices] = useState({});
-            const [modal, setModal] = useState({ isOpen: false });
 
-            const handleAdd = (e) => {
+            const [modal, setModal] = useState({ isOpen: false, type: 'confirm', title: '', message: '', onConfirm: null, confirmColor: 'red' });
+            const closeModal = () => setModal({ ...modal, isOpen: false });
+            
+            const handleFormSubmit = (e) => {
                 e.preventDefault();
+                // Pass extra data (price map) if it's a service
                 onAdd(activeTab, newItemName, activeTab === 'service' ? newItemPrices : null);
-                setNewItemName(''); setNewItemPrices({});
+                setNewItemName('');
+                setNewItemPrices({});
+            };
+            
+            const startEdit = (item) => {
+                setEditingId(item.id);
+                setEditName(item.name);
+                setEditPrices(item.prices || {});
             };
 
-            const startEdit = (item) => {
-                setEditingId(item.id); setEditName(item.name); setEditPrices(item.prices || {});
+            const cancelEdit = () => {
+                setEditingId(null);
+                setEditName('');
+                setEditPrices({});
             };
 
             const saveEdit = () => {
-                const data = { name: editName };
-                if (activeTab === 'service') data.prices = editPrices;
-                onEdit(activeTab, editingId, data);
+                const updatedData = { name: editName };
+                if (activeTab === 'service') {
+                    updatedData.prices = editPrices;
+                }
+                onEdit(activeTab, editingId, updatedData);
                 setEditingId(null);
             };
 
-            const handlePriceChange = (key, val, isEdit) => {
+            const handlePriceChange = (durationName, val, isEdit = false) => {
                 const setter = isEdit ? setEditPrices : setNewItemPrices;
                 const current = isEdit ? editPrices : newItemPrices;
-                if (!val) { const c = {...current}; delete c[key]; setter(c); }
-                else { setter({...current, [key]: parseFloat(val)}); }
+                
+                if (!val) {
+                    const copy = { ...current };
+                    delete copy[durationName];
+                    setter(copy);
+                } else {
+                    setter({ ...current, [durationName]: parseFloat(val) });
+                }
             };
 
-            let currentList = activeTab === 'therapist' ? therapists : activeTab === 'service' ? services : durations;
-            
+            let currentList = [];
+            let placeholderText = "";
+            let icon = null;
+
+            if (activeTab === 'therapist') {
+                currentList = therapists;
+                placeholderText = "Enter Therapist Name";
+                icon = <Icons.Users size={18} />;
+            } else if (activeTab === 'service') {
+                currentList = services;
+                placeholderText = "Enter Service Name (e.g. Swedish)";
+                icon = <Icons.Tag size={18} />;
+            } else {
+                currentList = durations;
+                placeholderText = "Enter Duration (e.g. 60 Mins)";
+                icon = <Icons.Hourglass size={18} />;
+            }
+
             return (
                 <div className="space-y-6 fade-in">
-                    <h2 className="text-lg font-bold text-logo-green-800 flex gap-2 items-center"><Icons.ShieldCheck size={18}/> Master Data Lists</h2>
+                    <h2 className="text-lg font-bold text-logo-green-800 flex gap-2 items-center"><Icons.ShieldCheck size={18} className="text-logo-green-700"/> Master Data Lists</h2>
+                    
+                    {/* Tabs */}
                     <div className="flex bg-slate-100 p-1 rounded-lg">
-                        {['therapist', 'service', 'duration'].map(tab => (
-                            <button key={tab} onClick={() => setActiveTab(tab)} className={`flex-1 py-2 text-xs font-bold capitalize rounded-md ${activeTab===tab ? 'bg-white shadow-sm text-logo-green-700' : 'text-slate-500'}`}>{tab}s</button>
-                        ))}
+                        <button onClick={() => setActiveTab('therapist')} className={`flex-1 py-2 text-xs font-bold rounded-md flex items-center justify-center gap-1 ${activeTab==='therapist' ? 'bg-white shadow-sm text-logo-green-700' : 'text-slate-500'}`}>
+                            <Icons.Users size={14}/> Therapists
+                        </button>
+                        <button onClick={() => setActiveTab('duration')} className={`flex-1 py-2 text-xs font-bold rounded-md flex items-center justify-center gap-1 ${activeTab==='duration' ? 'bg-white shadow-sm text-logo-green-700' : 'text-slate-500'}`}>
+                            <Icons.Clock size={14}/> Minutes
+                        </button>
+                        <button onClick={() => setActiveTab('service')} className={`flex-1 py-2 text-xs font-bold rounded-md flex items-center justify-center gap-1 ${activeTab==='service' ? 'bg-white shadow-sm text-logo-green-700' : 'text-slate-500'}`}>
+                            <Icons.Sparkles size={14}/> Services
+                        </button>
                     </div>
 
+                    {/* Add New Item */}
                     <div className="bg-white rounded-xl shadow-sm border border-logo-green-100 p-6">
-                        <form onSubmit={handleAdd} className="flex flex-col gap-3">
-                            <input required placeholder={`New ${activeTab} name`} value={newItemName} onChange={e => setNewItemName(e.target.value)} className="p-3 border rounded-lg bg-slate-50 outline-none focus:ring-2 focus:ring-logo-green-500"/>
+                        <h3 className="font-bold mb-4 flex items-center gap-2 text-sm uppercase tracking-wide text-slate-500"><Icons.Plus size={16}/> Add New {activeTab.charAt(0).toUpperCase() + activeTab.slice(1)}</h3>
+                        <form onSubmit={handleFormSubmit} className="flex flex-col gap-3">
+                            <div className="flex gap-2">
+                                <input 
+                                    required 
+                                    placeholder={placeholderText} 
+                                    value={newItemName} 
+                                    onChange={e => setNewItemName(e.target.value)} 
+                                    className="flex-1 p-3 border rounded-lg bg-slate-50 focus:ring-2 focus:ring-logo-green-500 outline-none"
+                                />
+                            </div>
+                            
+                            {/* Dynamic Price Inputs for Services */}
                             {activeTab === 'service' && (
                                 <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-                                    <p className="text-xs font-bold text-slate-500 mb-2 uppercase">Set Prices per Duration</p>
-                                    {durations.length === 0 ? <p className="text-xs text-red-400">Add Durations first.</p> : 
+                                    <p className="text-xs font-bold text-slate-500 mb-2 uppercase">Set Prices per Duration (Optional)</p>
+                                    {durations.length === 0 && <p className="text-xs text-red-400 italic">Add items to "Minutes" tab first to set prices.</p>}
                                     <div className="grid grid-cols-2 gap-2">
                                         {durations.map(d => (
                                             <div key={d.id} className="flex items-center gap-2 bg-white p-2 border rounded">
-                                                <span className="text-xs font-bold text-slate-600 w-16 truncate">{d.name}:</span>
-                                                <input type="number" placeholder="Price" className="w-full text-sm outline-none" value={newItemPrices[d.name] || ''} onChange={e => handlePriceChange(d.name, e.target.value, false)}/>
+                                                <span className="text-xs font-bold text-slate-600 whitespace-nowrap w-16">{d.name}:</span>
+                                                <input 
+                                                    type="number" 
+                                                    placeholder="Price"
+                                                    className="w-full text-sm outline-none"
+                                                    value={newItemPrices[d.name] || ''}
+                                                    onChange={e => handlePriceChange(d.name, e.target.value, false)}
+                                                />
                                             </div>
                                         ))}
-                                    </div>}
+                                    </div>
                                 </div>
                             )}
-                            <button className="bg-logo-green-600 text-white p-3 rounded-lg font-bold hover:bg-logo-green-700">Add Item</button>
+
+                            <button type="submit" className="w-full bg-logo-green-600 text-white p-3 rounded-lg font-bold hover:bg-logo-green-700 transition shadow-sm">Add to List</button>
                         </form>
                     </div>
 
-                    <div className="bg-white rounded-xl shadow-sm border overflow-hidden max-h-[400px] overflow-y-auto">
-                        {currentList.map(item => (
-                            <div key={item.id} className="p-4 border-b flex flex-col gap-2 last:border-b-0 hover:bg-slate-50">
-                                <div className="flex justify-between items-center">
-                                    {editingId === item.id ? <input value={editName} onChange={e=>setEditName(e.target.value)} className="flex-1 p-2 border rounded text-sm mr-2"/> : <span className="font-medium text-slate-700">{item.name}</span>}
-                                    <div className="flex gap-1">
-                                        {editingId === item.id ? 
-                                            <><button onClick={saveEdit} className="text-logo-green-600 p-2"><Icons.CheckCircle2/></button><button onClick={()=>setEditingId(null)} className="text-slate-400 p-2"><Icons.X/></button></> :
-                                            <><button onClick={()=>startEdit(item)} className="text-slate-300 hover:text-blue-500 p-2"><Icons.Pencil/></button><button onClick={()=>onDelete(activeTab, item.id)} className="text-slate-300 hover:text-red-500 p-2"><Icons.Trash2/></button></>
-                                        }
+                    {/* Current List */}
+                    <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+                        <div className="p-4 bg-logo-green-50 font-bold text-logo-green-800 text-sm border-b border-logo-green-100 flex justify-between items-center">
+                            <span>Current {activeTab === 'duration' ? 'Durations' : activeTab + 's'} ({currentList.length})</span>
+                            {icon}
+                        </div>
+                        
+                        <div className="max-h-[400px] overflow-y-auto">
+                            {currentList.length === 0 ? (
+                                <p className="text-center text-slate-400 p-6 italic">No items found.</p>
+                            ) : (
+                                currentList.map(item => (
+                                    <div key={item.id} className="p-4 border-b flex flex-col gap-2 last:border-b-0 hover:bg-slate-50">
+                                        <div className="flex justify-between items-center w-full">
+                                            {editingId === item.id ? (
+                                                // Edit Mode Header
+                                                <input 
+                                                    value={editName}
+                                                    onChange={e => setEditName(e.target.value)}
+                                                    className="flex-1 p-2 border rounded text-sm bg-white focus:ring-2 focus:ring-logo-green-500 mr-2"
+                                                />
+                                            ) : (
+                                                // View Mode Header
+                                                <span className="text-slate-700 font-medium">{item.name}</span>
+                                            )}
+                                            
+                                            {/* Actions */}
+                                            <div className="flex gap-1">
+                                                {editingId === item.id ? (
+                                                    <>
+                                                        <button onClick={saveEdit} className="text-logo-green-600 hover:bg-logo-green-50 p-2 rounded transition"><Icons.CheckCircle2 size={18}/></button>
+                                                        <button onClick={cancelEdit} className="text-slate-400 hover:bg-slate-100 p-2 rounded transition"><Icons.X size={18}/></button>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <button onClick={() => startEdit(item)} className="text-slate-300 hover:text-blue-500 p-2 rounded hover:bg-blue-50 transition" title="Edit Item">
+                                                            <Icons.Pencil size={16} />
+                                                        </button>
+                                                        <button type="button" onClick={() => onDelete(activeTab, item.id, item.name)} className="text-slate-300 hover:text-red-500 p-2 rounded hover:bg-red-50 transition" title="Delete Item">
+                                                            <Icons.Trash2 size={16}/>
+                                                        </button>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {/* Service Pricing Details (View & Edit) */}
+                                        {activeTab === 'service' && (
+                                            <div className="text-xs text-slate-500 w-full">
+                                                {editingId === item.id ? (
+                                                    <div className="grid grid-cols-2 gap-2 mt-2 bg-slate-100 p-2 rounded">
+                                                        {durations.map(d => (
+                                                            <div key={d.id} className="flex items-center gap-2">
+                                                                <span className="font-bold w-14">{d.name}:</span>
+                                                                <input 
+                                                                    type="number" 
+                                                                    className="w-full p-1 border rounded text-xs"
+                                                                    placeholder="0"
+                                                                    value={editPrices[d.name] || ''}
+                                                                    onChange={e => handlePriceChange(d.name, e.target.value, true)}
+                                                                />
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <div className="flex flex-wrap gap-2 mt-1">
+                                                        {item.prices && Object.keys(item.prices).length > 0 ? (
+                                                            Object.entries(item.prices).map(([dur, price]) => (
+                                                                <span key={dur} className="bg-logo-green-50 text-logo-green-700 px-2 py-0.5 rounded border border-logo-green-100">
+                                                                    {dur}: <span className="font-bold">P{price}</span>
+                                                                </span>
+                                                            ))
+                                                        ) : (
+                                                            <span className="italic text-slate-300">No specific prices set</span>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
-                                </div>
-                                {activeTab === 'service' && (editingId === item.id || (item.prices && Object.keys(item.prices).length > 0)) && (
-                                    <div className={`text-xs ${editingId === item.id ? 'bg-slate-100 p-2 rounded grid grid-cols-2 gap-2' : 'flex flex-wrap gap-2'}`}>
-                                        {editingId === item.id ? durations.map(d => (
-                                            <div key={d.id} className="flex items-center gap-1"><span className="font-bold">{d.name}:</span><input type="number" className="w-full p-1 border rounded" value={editPrices[d.name]||''} onChange={e=>handlePriceChange(d.name, e.target.value, true)}/></div>
-                                        )) : Object.entries(item.prices || {}).map(([k,v]) => <span key={k} className="bg-logo-green-50 text-logo-green-700 px-2 py-0.5 rounded border border-logo-green-100">{k}: <b>P{v}</b></span>)}
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                        {currentList.length === 0 && <p className="text-center text-slate-400 p-6 italic">List is empty.</p>}
+                                ))
+                            )}
+                        </div>
                     </div>
+                      {modal.isOpen && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60"><div className="bg-white rounded-xl p-6 max-w-sm"><h3 className="font-bold mb-2">{modal.title}</h3><p className="mb-4 text-sm">{modal.message}</p><div className="flex gap-2 justify-end">{modal.type==='confirm'&&<button onClick={closeModal} className="px-4 py-2 text-slate-500">Cancel</button>}<button onClick={modal.onConfirm||closeModal} className={`px-4 py-2 rounded text-white ${modal.confirmColor==='red'?'bg-red-500':'bg-logo-green-600'}`}>Okay</button></div></div></div>}
                 </div>
             );
         };
+
 
         // --- MAIN APP ---
         const App = () => {
             const [fb, setFb] = useState(null);
-            const [user, setUser] = useState(null);
+            const [fbUser, setFbUser] = useState(null);
+            const [isOnline, setIsOnline] = useState(navigator.onLine);
             const [dbReady, setDbReady] = useState(false);
-            const [loading, setLoading] = useState(false); // Global loading state for actions
-            const [configError, setConfigError] = useState(null);
+            const [configError, setConfigError] = useState(null); 
 
-            // Data States
+            const [user, setUser] = useState(null);
+            const [users, setUsers] = useState([]);
             const [transactions, setTransactions] = useState([]);
-            const [history, setHistory] = useState([]); // Lazy loaded
-            const [users, setUsers] = useState([]); // Only loaded if admin
-            const [therapists, setTherapists] = useState([]);
-            const [services, setServices] = useState([]);
-            const [durations, setDurations] = useState([]);
-
-            // UI States
+            const [history, setHistory] = useState([]);
+            
+            // Master Lists
+            const [therapistsList, setTherapistsList] = useState([]);
+            const [servicesList, setServicesList] = useState([]);
+            const [durationsList, setDurationsList] = useState([]);
+            
             const [view, setView] = useState('dashboard');
+            const [expandedHistoryId, setExpandedHistoryId] = useState(null);
+            
+            // Staff Accountability State
             const [showMyShift, setShowMyShift] = useState(false);
-            const [historyExpanded, setHistoryExpanded] = useState(null);
-            const [modal, setModal] = useState({ isOpen: false });
-            const [editUserModal, setEditUserModal] = useState({ isOpen: false });
 
-            // Form States
-            const [loginForm, setLoginForm] = useState({ username: '', pin: '', branch: '' });
+            // History Filtering State
+            const [historyStartDate, setHistoryStartDate] = useState('');
+            const [historyEndDate, setHistoryEndDate] = useState('');
+            
+            // Forms
+            const [loginUsername, setLoginUsername] = useState('');
+            const [loginPin, setLoginPin] = useState('');
+            const [loginBranch, setLoginBranch] = useState(''); 
+            
             const [newUser, setNewUser] = useState({ name: '', username: '', pin: '', role: 'staff' });
-            const [bookingForm, setBookingForm] = useState({ clientName: '', service: '', therapist: '', amount: '', duration: '', type: 'booking', time: '', targetBranch: '' });
-            const [profileForm, setProfileForm] = useState({ username: '', pin: '' });
+            const [profileData, setProfileData] = useState({ username: '', pin: '' });
+            
+            const [formData, setFormData] = useState({
+                clientName: '', 
+                service: '', 
+                therapist: '', 
+                amount: '', 
+                duration: '', 
+                type: 'booking', 
+                time: new Date().toTimeString().slice(0, 5),
+                targetBranch: ''
+            });
+            const [modal, setModal] = useState({
+                isOpen: false, type: 'confirm', title: '', message: '', onConfirm: null, confirmColor: 'red'
+            });
 
-            // --- INITIALIZATION ---
+            const [editUserModal, setEditUserModal] = useState({ isOpen: false, user: null, newPin: '' });
+
+            const closeModal = () => setModal({ ...modal, isOpen: false });
+            const closeEditUserModal = () => setEditUserModal({ isOpen: false, user: null, newPin: '' });
+
+
+            // --- 1. INITIALIZE FIREBASE ---
             useEffect(() => {
-                const init = async () => {
-                    if (!firebaseConfig.projectId) return setConfigError("Config missing.");
+                const initFirebase = async () => {
+                    if (!firebaseConfig || !firebaseConfig.projectId) {
+                        setConfigError("Firebase configuration is incomplete. Please check the firebaseConfig object.");
+                        return;
+                    }
+                    
                     try {
-                        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+                        if (!firebase.apps.length) {
+                            firebase.initializeApp(firebaseConfig);
+                        }
+                        
                         const auth = firebase.auth();
                         const db = firebase.firestore();
-                        
-                        if (initialAuthToken) await auth.signInWithCustomToken(initialAuthToken);
-                        else await auth.signInAnonymously();
+                        const currentAppId = firebaseConfig.projectId || 'default-app-id';
 
-                        // Enable offline persistence if possible
-                        try { await db.enablePersistence(); } catch(e) { console.log("Persistence disabled"); }
+                        if (initialAuthToken) {
+                            await auth.signInWithCustomToken(initialAuthToken);
+                        } else {
+                            await auth.signInAnonymously();
+                        }
 
-                        auth.onAuthStateChanged(u => {
-                            if (u) setFb({ db, auth, appId: firebaseConfig.projectId });
+                        auth.onAuthStateChanged((u) => {
+                            if (u) {
+                                setFbUser(u);
+                                setFb({ db, auth, appId: currentAppId });
+                            }
                         });
-                    } catch (e) { setConfigError(e.message); }
+                    } catch (error) { 
+                        console.error("FB Init Error:", error); 
+                        
+                        let msg = error.message || "Unknown connection error";
+                        
+                        if (error.code === 'auth/operation-not-allowed') {
+                            msg = "Anonymous Authentication is DISABLED. Please go to Firebase Console -> Authentication -> Sign-in method -> Enable Anonymous.";
+                        } else if (error.code === 'auth/unauthorized-domain') {
+                            msg = "Domain not authorized. Go to Firebase Console -> Authentication -> Settings -> Authorized Domains and add 'vercel.app' or your custom domain.";
+                        }
+
+                        setConfigError(msg); 
+                    }
                 };
-                init();
+
+                setTimeout(initFirebase, 500);
+
+                window.addEventListener('online', () => setIsOnline(true));
+                window.addEventListener('offline', () => setIsOnline(false));
+                return () => {
+                    window.removeEventListener('online', () => setIsOnline(true));
+                    window.removeEventListener('offline', () => setIsOnline(false));
+                };
             }, []);
 
-            // --- DATA SYNC (SCALABILITY FIX) ---
-            useEffect(() => {
-                if (!fb || !user) return;
-                const { db, appId } = fb;
-                const path = `artifacts/${appId}/public/data`;
-
-                // 1. Transactions: Sync only "Today" ideally, but for simplicity syncing whole collection
-                //    Future optimization: .where('timestamp', '>', startOfDay)
-                const unsubTrans = db.collection(`${path}/transactions`)
-                    .onSnapshot(snap => {
-                        const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                        // Client-side sort is fast for active transactions
-                        setTransactions(data.sort((a, b) => (safeDate(b.timestamp) || 0) - (safeDate(a.timestamp) || 0)));
-                        setDbReady(true);
-                    });
-
-                // 2. Master Lists
-                const unsubTherapists = db.collection(`${path}/therapists`).onSnapshot(s => setTherapists(s.docs.map(d => ({id: d.id, ...d.data()})).sort((a,b) => a.name.localeCompare(b.name))));
-                const unsubServices = db.collection(`${path}/services`).onSnapshot(s => setServices(s.docs.map(d => ({id: d.id, ...d.data()})).sort((a,b) => a.name.localeCompare(b.name))));
-                const unsubDurations = db.collection(`${path}/durations`).onSnapshot(s => setDurations(s.docs.map(d => ({id: d.id, ...d.data()})).sort((a,b) => parseInt(a.name)-parseInt(b.name))));
-
-                // 3. Users (Only if Admin, security fix handled in Login but lists needed for management)
-                let unsubUsers = () => {};
-                if (user.role === 'admin') {
-                    unsubUsers = db.collection(`${path}/users`).onSnapshot(s => setUsers(s.docs.map(d => ({id: d.id, ...d.data()}))));
-                }
-
-                return () => { unsubTrans(); unsubTherapists(); unsubServices(); unsubDurations(); unsubUsers(); };
-            }, [fb, user]);
-
-            // --- HELPER: PRICE CALCULATION ---
-            const calculatePrice = (serviceName, durationName) => {
-                if (!serviceName) return '';
-                const s = services.find(x => x.name === serviceName);
-                if (!s) return '';
-                if (durationName && s.prices && s.prices[durationName]) return s.prices[durationName];
-                if (s.price) return s.price; // fallback
-                return '';
-            };
-
-            // --- ACTIONS ---
-
-            // SECURITY FIX: Login queries specific user only
-            const handleLogin = async (e) => {
-                e.preventDefault();
-                if (!loginForm.branch) return alertModal("Select a branch.");
-                setLoading(true);
-
-                try {
-                    const basePath = `artifacts/${fb.appId}/public/data`;
-                    const snapshot = await fb.db.collection(`${basePath}/users`)
-                        .where('username', '==', loginForm.username.toLowerCase())
-                        .limit(1)
-                        .get();
-
-                    if (snapshot.empty) throw new Error("Invalid credentials.");
-
-                    const userData = snapshot.docs[0].data();
-                    const hashedInput = await hashPin(loginForm.pin);
-
-                    if (userData.pin === hashedInput) {
-                        // Init default User if first time (Owner)
-                        if (userData.username === 'admin' && userData.pin === '8888' && !users.length) {
-                            // Seed lists if empty
-                            if (therapists.length === 0) fb.db.collection(`${basePath}/therapists`).add({name:'Therapist 1'});
-                            if (durations.length === 0) fb.db.collection(`${basePath}/durations`).add({name:'60 Mins'});
-                        }
-                        setUser({ ...userData, id: snapshot.docs[0].id, currentBranch: loginForm.branch });
-                        setLoginForm({ username: '', pin: '', branch: '' });
-                        setView('dashboard');
-                    } else {
-                        throw new Error("Invalid credentials.");
-                    }
-                } catch (err) {
-                    alertModal(err.message, 'red');
-                } finally {
-                    setLoading(false);
-                }
-            };
-
-            // DATA INTEGRITY FIX: Server Timestamp
-            const handleBooking = async (e) => {
-                e.preventDefault();
-                const { clientName, service, therapist, amount, targetBranch } = bookingForm;
-                const finalBranch = user.currentBranch === 'ALL' ? targetBranch : user.currentBranch;
-
-                if (!clientName || !service || !therapist || !amount || (user.currentBranch === 'ALL' && !finalBranch)) {
-                    return alertModal("Please fill all required fields.", 'red');
-                }
-
-                setLoading(true);
-                try {
-                    await fb.db.collection(`artifacts/${fb.appId}/public/data/transactions`).add({
-                        ...bookingForm,
-                        amount: parseFloat(amount),
-                        branch: finalBranch,
-                        recordedBy: user.name,
-                        status: bookingForm.type === 'sale' ? 'completed' : 'pending',
-                        timestamp: firebase.firestore.FieldValue.serverTimestamp() // FIX: Server-side time
-                    });
-                    
-                    setBookingForm({ clientName: '', service: '', therapist: '', amount: '', duration: '', type: 'booking', time: '', targetBranch: user.currentBranch === 'ALL' ? finalBranch : '' });
-                    alertModal(`Booking saved for ${finalBranch}!`, 'logo-green');
-                    setView('dashboard');
-                } catch(err) { alertModal("Failed to save.", 'red'); }
-                finally { setLoading(false); }
-            };
-
-            // SCALABILITY FIX: Fetch history only on demand with limit
-            const loadHistory = async (limit = 20) => {
-                setLoading(true);
-                try {
-                    let q = fb.db.collection(`artifacts/${fb.appId}/public/data/history`)
-                        .orderBy('timestamp_val', 'desc')
-                        .limit(limit);
-                    const snap = await q.get();
-                    setHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                } catch(err) { console.error(err); }
-                finally { setLoading(false); }
-            };
-
-            // --- OTHER HANDLERS (Simplified) ---
-            const alertModal = (msg, color='logo-green') => setModal({ isOpen: true, message: msg, confirmColor: color });
+            // --- 2. DATA SYNC ---
             
-            const handleListAdd = async (type, name, extra) => {
-                if (!name) return;
-                const col = type === 'therapist' ? 'therapists' : type === 'service' ? 'services' : 'durations';
-                const data = { name };
-                if (type === 'service' && extra) data.prices = extra;
-                await fb.db.collection(`artifacts/${fb.appId}/public/data/${col}`).add(data);
-            };
-
-            const handleListDelete = async (type, id) => {
-                const col = type === 'therapist' ? 'therapists' : type === 'service' ? 'services' : 'durations';
-                if(confirm("Delete this item?")) await fb.db.collection(`artifacts/${fb.appId}/public/data/${col}`).doc(id).delete();
-            };
-
-            const handleListEdit = async (type, id, data) => {
-                const col = type === 'therapist' ? 'therapists' : type === 'service' ? 'services' : 'durations';
-                await fb.db.collection(`artifacts/${fb.appId}/public/data/${col}`).doc(id).update(data);
-            };
-
-            const closeDay = async () => {
-                if (!transactions.length) return alertModal("No transactions.", 'red');
-                if (!confirm("Close day and archive?")) return;
-                setLoading(true);
-                const batch = fb.db.batch();
-                const histRef = fb.db.collection(`artifacts/${fb.appId}/public/data/history`).doc();
+            useEffect(() => {
+                if (!fb || !fbUser) return;
+                const { db, appId } = fb;
+                const basePath = `artifacts/${appId}/public/data`;
                 
-                // Calculate Stats
-                const total = transactions.reduce((a,b) => a + (b.status==='completed' ? parseFloat(b.amount) : 0), 0);
-                
-                batch.set(histRef, {
-                    date: new Date().toDateString(),
-                    timestamp: new Date().toLocaleString(),
-                    timestamp_val: Date.now(), // For sorting
-                    branch: user.currentBranch,
-                    closedBy: user.name,
-                    transactions: transactions,
-                    stats: { totalRevenue: total }
-                });
+                const getCollection = (name) => db.collection(`${basePath}/${name}`);
 
-                // Delete active transactions
-                transactions.forEach(t => {
-                    batch.delete(fb.db.collection(`artifacts/${fb.appId}/public/data/transactions`).doc(t.id));
-                });
+                // Transactions
+                const unsubTrans = getCollection('transactions')
+                    .onSnapshot((snapshot) => {
+                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        data.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+                        setTransactions(data);
+                        setDbReady(true);
+                    }, (error) => console.error("Sync Error: Transactions", error));
 
-                await batch.commit();
-                setLoading(false);
-                setView('history');
-                loadHistory(); // Refresh history view
-            };
+                // History
+                const unsubHistory = getCollection('history')
+                    .onSnapshot((snapshot) => {
+                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        data.sort((a, b) => (b.timestamp_val || 0) - (a.timestamp_val || 0));
+                        setHistory(data);
+                    }, (error) => console.error("Sync Error: History", error));
 
-            const downloadCSV = (h) => {
-                const rows = [
-                    ['Date', 'Branch', 'Time', 'Client', 'Service', 'Duration', 'Therapist', 'Price', 'Status'],
-                    ...h.transactions.map(t => [
-                        `"${h.date}"`, `"${t.branch}"`, `"${t.time}"`, `"${t.clientName}"`, `"${t.service}"`, `"${t.duration||''}"`, `"${t.therapist}"`, t.amount, t.status
-                    ])
+                // Users
+                const unsubUsers = getCollection('users')
+                    .onSnapshot(async (snapshot) => {
+                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        const userColl = getCollection('users');
+                        
+                        if (data.length === 0) {
+                            seedDefaultUsers(db, basePath);
+                            return; 
+                        }
+
+                        // Check hash updates
+                        const needsUpdate = data.filter(u => u.username === 'admin' || u.username === 'morning' || u.username === 'night');
+                        let shouldWait = false;
+                        for (const u of needsUpdate) {
+                            if (u.pin === '8888' || u.pin === '1111' || u.pin === '2222') {
+                                const hashedPin = await hashPin(u.pin);
+                                await userColl.doc(u.id).update({ pin: hashedPin });
+                                shouldWait = true;
+                            }
+                        }
+                        
+                        if (!shouldWait) {
+                            setUsers(data);
+                        }
+
+                    }, (error) => console.error("Sync Error: Users", error));
+
+                // Therapists
+                const unsubTherapists = getCollection('therapists')
+                    .onSnapshot((snapshot) => {
+                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setTherapistsList(data.sort((a, b) => a.name.localeCompare(b.name)));
+                    }, (error) => console.error("Sync Error: Therapists", error));
+
+                // Services
+                const unsubServices = getCollection('services')
+                    .onSnapshot((snapshot) => {
+                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setServicesList(data.sort((a, b) => a.name.localeCompare(b.name)));
+                    }, (error) => console.error("Sync Error: Services", error));
+
+                // Durations
+                const unsubDurations = getCollection('durations')
+                    .onSnapshot((snapshot) => {
+                        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        
+                        // Sort based on numeric value if possible, else string
+                        setDurationsList(data.sort((a, b) => {
+                            const valA = parseInt(a.name) || 0;
+                            const valB = parseInt(b.name) || 0;
+                            return valA - valB;
+                        }));
+                    }, (error) => console.error("Sync Error: Durations", error));
+
+
+                return () => { 
+                    unsubTrans(); 
+                    unsubHistory(); 
+                    unsubUsers(); 
+                    unsubTherapists(); 
+                    unsubServices();
+                    unsubDurations();
+                };
+            }, [fb, fbUser]);
+
+            // --- 3. HELPERS ---
+            
+            const seedDefaultUsers = async (db, basePath) => {
+                const defaults = [
+                    { name: 'Owner Admin', username: 'admin', pin: '8888', role: 'admin' },
+                    { name: 'Morning Rec.', username: 'morning', pin: '1111', role: 'staff' },
+                    { name: 'Night Rec.', username: 'night', pin: '2222', role: 'staff' }
                 ];
-                const csv = rows.map(r => r.join(',')).join('\n');
+                const userColl = db.collection(`${basePath}/users`);
+                const usersToSeed = await Promise.all(defaults.map(async u => {
+                    const hashedPin = await hashPin(u.pin);
+                    return { ...u, pin: hashedPin }; 
+                }));
+                for (const u of usersToSeed) await userColl.add(u);
+            };
+
+            useEffect(() => {
+                if (view === 'profile' && user) {
+                    const freshUser = users.find(u => u.id === user.id) || user;
+                    setProfileData({ username: freshUser.username, pin: '' }); 
+                }
+            }, [view, user, users]);
+
+            // Update form data's targetBranch when user or branch changes
+            useEffect(() => {
+                if (user && formData.targetBranch === '' && user.currentBranch !== 'ALL') {
+                    setFormData(prev => ({ ...prev, targetBranch: user.currentBranch }));
+                }
+            }, [user]);
+
+            const formatCurrency = (val) => {
+                if (val === undefined || val === null || val === '') return '';
+                return new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(val);
+            };
+            
+            const formatDate = (timestamp) => {
+                if (!timestamp) return 'N/A';
+                const date = new Date(timestamp);
+                return date.toLocaleDateString();
+            };
+            
+            // Filter Transactions by Branch AND My Shift Toggle
+            const getFilteredData = () => {
+                if (!user) return [];
+                let data = transactions;
+
+                // 1. Filter by Branch (if not ALL)
+                if (user.currentBranch !== 'ALL') {
+                    data = data.filter(t => t.branch === user.currentBranch);
+                }
+
+                // 2. Filter by User (if My Shift is toggled AND user is staff)
+                if (showMyShift && user.role !== 'admin') {
+                    data = data.filter(t => t.recordedBy === user.name);
+                }
+                
+                return data;
+            };
+
+            const filteredTransactions = getFilteredData();
+
+            const stats = useMemo(() => {
+                const data = filteredTransactions;
+                const totalRevenue = data.filter(t => t.status === 'completed').reduce((acc, curr) => acc + Number(curr.amount), 0);
+                const pendingValue = data.filter(t => t.status === 'pending').reduce((acc, curr) => acc + Number(curr.amount), 0);
+                const totalBookings = data.filter(t => t.type === 'booking').length;
+                const completedSales = data.filter(t => t.status === 'completed').length;
+                return { totalRevenue, pendingValue, totalBookings, completedSales };
+            }, [filteredTransactions]);
+
+            // Therapist Stats by Branch
+            const therapistStats = useMemo(() => {
+                const grouped = {};
+                
+                filteredTransactions.forEach(t => {
+                    const branch = t.branch || (user.currentBranch !== 'ALL' ? user.currentBranch : 'Unknown');
+                    const name = t.therapist ? t.therapist.trim() : 'Unassigned';
+                    
+                    if (!name) return;
+
+                    if (!grouped[branch]) grouped[branch] = {};
+                    if (!grouped[branch][name]) grouped[branch][name] = { name, count: 0, amount: 0 };
+                    
+                    grouped[branch][name].count++;
+                    grouped[branch][name].amount += Number(t.amount);
+                });
+
+                const result = {};
+                Object.keys(grouped).forEach(branch => {
+                    result[branch] = Object.values(grouped[branch]).sort((a, b) => b.count - a.count);
+                });
+                
+                return result;
+            }, [filteredTransactions, user]);
+            
+            // Filtered History Logic (for Admin view)
+            const filteredHistory = useMemo(() => {
+                let data = history;
+
+                if (historyStartDate) {
+                    const startTimestamp = new Date(historyStartDate).getTime();
+                    data = data.filter(h => (h.timestamp_val || 0) >= startTimestamp);
+                }
+
+                if (historyEndDate) {
+                    const endTimestamp = new Date(historyEndDate);
+                    endTimestamp.setDate(endTimestamp.getDate() + 1); 
+                    const endTimestampVal = endTimestamp.getTime();
+                    data = data.filter(h => (h.timestamp_val || 0) < endTimestampVal);
+                }
+
+                return data;
+            }, [history, historyStartDate, historyEndDate]);
+
+
+            const downloadCSV = (record) => {
+                const headers = ['Date', 'Branch', 'Time', 'Client Name', 'Service', 'Duration', 'Therapist', 'Amount', 'Status', 'Recorded By'];
+                const rows = record.transactions.map(t => [
+                    `"${record.date}"`, 
+                    `"${t.branch || 'N/A'}"`, 
+                    `"${t.time}"`, 
+                    `"${t.clientName}"`, 
+                    `"${t.service}"`,
+                    `"${t.duration || ''}"`, // Added Duration to CSV 
+                    `"${t.therapist}"`, 
+                    t.amount, 
+                    t.status, 
+                    `"${t.recordedBy || 'System'}"`
+                ]);
+                const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
                 const link = document.createElement('a');
-                link.href = URL.createObjectURL(new Blob([csv], {type: 'text/csv'}));
-                link.download = `Report_${h.date}.csv`;
+                link.href = URL.createObjectURL(blob);
+                link.download = `AtHome_Report_${record.date.replace(/,/g, '').replace(/ /g, '_')}.csv`;
                 link.click();
             };
 
-            // --- RENDER HELPERS ---
-            if (configError) return <div className="h-screen flex items-center justify-center bg-slate-100 p-4 text-center"><div className="bg-white p-6 rounded shadow"><Icons.Cloud size={40} className="mx-auto mb-2 text-red-400"/><h2 className="font-bold">Setup Error</h2><p className="text-sm text-slate-500 font-mono bg-slate-50 p-2 rounded border mt-2">{configError}</p></div></div>;
-            
-            // FIX: Only wait for Firebase (fb) to initialize, do not wait for dbReady before login
-            if (!fb) return <div className="h-screen flex flex-col items-center justify-center"><div className="loader mb-2"></div><p className="text-xs text-slate-400">Secure Connection...</p></div>;
 
-            // --- LOGIN VIEW ---
-            if (!user) return (
-                <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 fade-in">
-                    <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-sm relative overflow-hidden border border-logo-green-100">
-                        <div className="absolute top-0 left-0 w-full h-1.5 bg-logo-green-600"></div>
-                        <div className="text-center mb-6">
-                            <div className="w-16 h-16 bg-logo-green-50 rounded-full flex items-center justify-center mx-auto mb-4 text-logo-green-700"><Icons.Lock size={32}/></div>
-                            <h1 className="text-2xl font-bold text-logo-green-900">At HOME Spa</h1>
-                            <p className="text-xs text-slate-400">Staff Portal</p>
+            // --- 4. ACTIONS ---
+
+            // List Management Handlers
+            const handleAddItem = async (listType, itemName, itemPrices = null) => {
+                if (!itemName) return;
+
+                const basePath = `artifacts/${fb.appId}/public/data`;
+                let collectionName = '';
+                let data = { name: itemName.trim() };
+                let checkList = [];
+
+                if (listType === 'therapist') {
+                    collectionName = 'therapists';
+                    checkList = therapistsList;
+                } else if (listType === 'service') {
+                    collectionName = 'services';
+                    checkList = servicesList;
+                    if (itemPrices) data.prices = itemPrices; // Store price map
+                } else if (listType === 'duration') {
+                    collectionName = 'durations';
+                    checkList = durationsList;
+                } else {
+                    return;
+                }
+                
+                if (checkList.some(item => item.name.toLowerCase() === itemName.trim().toLowerCase())) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Duplicate Item', message: `${itemName} already exists in ${listType}s.`, onConfirm: closeModal, confirmColor: 'red' });
+                    return;
+                }
+
+                await fb.db.collection(`${basePath}/${collectionName}`).add(data);
+            };
+
+            const handleDeleteItem = (listType, id, name) => {
+                let collectionName = '';
+                if (listType === 'therapist') collectionName = 'therapists';
+                else if (listType === 'service') collectionName = 'services';
+                else if (listType === 'duration') collectionName = 'durations';
+                else return;
+
+                const basePath = `artifacts/${fb.appId}/public/data`;
+                
+                setModal({
+                    isOpen: true, type: 'confirm', title: `Delete ${listType}?`, message: `Are you sure you want to permanently delete "${name}"?`, confirmColor: 'red',
+                    onConfirm: async () => {
+                        await fb.db.collection(`${basePath}/${collectionName}`).doc(id).delete();
+                        closeModal();
+                    }
+                });
+            };
+
+            const handleEditItem = async (listType, id, updatedData) => {
+                let collectionName = '';
+                if (listType === 'therapist') collectionName = 'therapists';
+                else if (listType === 'service') collectionName = 'services';
+                else if (listType === 'duration') collectionName = 'durations';
+                else return;
+
+                const basePath = `artifacts/${fb.appId}/public/data`;
+                try {
+                    await fb.db.collection(`${basePath}/${collectionName}`).doc(id).update(updatedData);
+                    setModal({ isOpen: true, type: 'alert', title: 'Success', message: 'Item updated successfully.', onConfirm: closeModal, confirmColor: 'logo-green' });
+                } catch (error) {
+                    console.error("Update error:", error);
+                    setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Failed to update item.', onConfirm: closeModal, confirmColor: 'red' });
+                }
+            };
+
+            // History Deletion Handler (Admin Only)
+            const handleDeleteHistory = (id, date) => {
+                if (user?.role !== 'admin') return;
+
+                 setModal({
+                    isOpen: true, type: 'confirm', title: `Delete Report?`, message: `Are you sure you want to permanently delete the archived report for ${date}? This action cannot be undone.`, confirmColor: 'red',
+                    onConfirm: async () => {
+                        const basePath = `artifacts/${fb.appId}/public/data`;
+                        await fb.db.collection(`${basePath}/history`).doc(id).delete();
+                        closeModal();
+                    }
+                });
+            };
+            
+
+            const handleLoginSubmit = async (e) => {
+                e.preventDefault();
+                if (!loginBranch) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Branch Required', message: 'Please select your branch location.', onConfirm: closeModal, confirmColor: 'red' });
+                    return;
+                }
+                
+                const hashedPinAttempt = await hashPin(loginPin);
+                if (!hashedPinAttempt) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Login Error', message: 'PIN must be at least 4 digits.', onConfirm: closeModal, confirmColor: 'red' });
+                    return;
+                }
+
+                const found = users.find(u => u.username.toLowerCase() === loginUsername.toLowerCase() && u.pin === hashedPinAttempt);
+                
+                if (found) {
+                    setUser({ ...found, currentBranch: loginBranch });
+                    setLoginUsername(''); setLoginPin(''); setLoginBranch(''); setView('dashboard');
+                } else {
+                    setModal({ isOpen: true, type: 'alert', title: 'Login Failed', message: 'Check credentials.', onConfirm: closeModal, confirmColor: 'red' });
+                }
+            };
+
+            // HELPER: Calculate Price
+            const calculatePrice = (serviceName, durationName) => {
+                if (!serviceName) return '';
+                
+                const foundService = servicesList.find(s => s.name === serviceName);
+                if (!foundService) return '';
+
+                // 1. Try to find exact duration price
+                if (durationName && foundService.prices && foundService.prices[durationName]) {
+                    return foundService.prices[durationName];
+                } 
+                
+                // 2. Fallback to base price (if any legacy price exists)
+                if (foundService.price) {
+                    return foundService.price;
+                }
+
+                return '';
+            };
+
+            // --- FIX: Explicit Handlers without useEffect Loops ---
+            
+            const handleServiceChange = (serviceName) => {
+                // Calculate price based on this NEW service + EXISTING duration
+                const newPrice = calculatePrice(serviceName, formData.duration);
+                
+                setFormData({ 
+                    ...formData, 
+                    service: serviceName,
+                    amount: newPrice 
+                });
+            };
+
+            const handleDurationChange = (durationName) => {
+                // Calculate price based on EXISTING service + NEW duration
+                const newPrice = calculatePrice(formData.service, durationName);
+
+                setFormData({ 
+                    ...formData, 
+                    duration: durationName,
+                    amount: newPrice 
+                });
+            };
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                const transactionBranch = user.currentBranch === 'ALL' ? formData.targetBranch : user.currentBranch;
+
+                if (!formData.clientName || !formData.amount || !formData.service || !formData.therapist) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Missing Information', message: 'Please ensure Client Name, Service, Therapist, and Price are all entered.', onConfirm: closeModal, confirmColor: 'red' });
+                    return;
+                }
+                
+                if (user.currentBranch === 'ALL' && !formData.targetBranch) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Missing Branch', message: 'Please select a Target Branch for this booking.', onConfirm: closeModal, confirmColor: 'red' });
+                    return;
+                }
+
+                const basePath = `artifacts/${fb.appId}/public/data`;
+                await fb.db.collection(`${basePath}/transactions`).add({
+                    ...formData,
+                    amount: parseFloat(formData.amount),
+                    status: formData.type === 'sale' ? 'completed' : 'pending',
+                    recordedBy: user.name,
+                    branch: transactionBranch, 
+                    timestamp: Date.now()
+                });
+
+                const resetTargetBranch = user.currentBranch === 'ALL' ? transactionBranch : user.currentBranch;
+                
+                setFormData({ 
+                    clientName: '', 
+                    service: '', 
+                    duration: '',
+                    therapist: '', 
+                    amount: '', 
+                    type: 'booking', 
+                    time: new Date().toTimeString().slice(0, 5),
+                    targetBranch: resetTargetBranch
+                });
+                
+                setModal({ isOpen: true, type: 'alert', title: 'Booking Saved!', message: `${formData.clientName} recorded for ${transactionBranch}.`, onConfirm: closeModal, confirmColor: 'logo-green' });
+
+                setView('dashboard');
+            };
+
+            const toggleStatus = async (t) => {
+                const basePath = `artifacts/${fb.appId}/public/data`;
+                const newStatus = t.status === 'pending' ? 'completed' : 'pending';
+                await fb.db.collection(`${basePath}/transactions`).doc(t.id).update({ status: newStatus });
+            };
+
+            const requestDelete = (id) => {
+                if (user?.role !== 'admin') {
+                    setModal({ isOpen: true, type: 'alert', title: 'Access Denied', message: 'Only Admin can delete.', onConfirm: closeModal, confirmColor: 'red' });
+                    return;
+                }
+                setModal({
+                    isOpen: true, type: 'confirm', title: 'Delete Record?', message: 'Permanently remove from cloud?', confirmColor: 'red',
+                    onConfirm: async () => {
+                        const basePath = `artifacts/${fb.appId}/public/data`;
+                        await fb.db.collection(`${basePath}/transactions`).doc(id).delete();
+                        closeModal();
+                    }
+                });
+            };
+
+            const requestEndDay = () => {
+                if (user?.role !== 'admin') {
+                    setModal({ isOpen: true, type: 'alert', title: 'Access Denied', message: 'Only Admin can close the day.', onConfirm: closeModal, confirmColor: 'red' });
+                    return;
+                }
+                if (filteredTransactions.length === 0) {
+                    setModal({ isOpen: true, type: 'alert', title: 'No Data', message: 'Nothing to save for this branch.', onConfirm: closeModal, confirmColor: 'logo-green' });
+                    return;
+                }
+
+                setModal({
+                    isOpen: true, type: 'confirm', title: 'End Day & Sync?', message: `Save ${user.currentBranch} report to history and clear board?`, confirmColor: 'logo-green',
+                    onConfirm: async () => {
+                        const basePath = `artifacts/${fb.appId}/public/data`;
+                        const historyColl = fb.db.collection(`${basePath}/history`);
+                        const transColl = fb.db.collection(`${basePath}/transactions`);
+
+                        await historyColl.add({
+                            date: new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+                            timestamp: new Date().toLocaleString(),
+                            timestamp_val: Date.now(),
+                            transactions: filteredTransactions,
+                            stats: stats,
+                            branch: user.currentBranch,
+                            closedBy: user.name
+                        });
+
+                        const deletePromises = filteredTransactions.map(t => transColl.doc(t.id).delete());
+                        await Promise.all(deletePromises);
+
+                        setView('history');
+                        closeModal();
+                    }
+                });
+            };
+
+            // User & Profile Handlers
+            const handleAddUser = async (e) => {
+                e.preventDefault();
+                if (!newUser.name || !newUser.username || !newUser.pin) return;
+                
+                const hashedPin = await hashPin(newUser.pin);
+                if (!hashedPin) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'PIN hashing failed. Check PIN length.', onConfirm: closeModal, confirmColor: 'red' });
+                    return;
+                }
+
+                if (users.some(u => u.username.toLowerCase() === newUser.username.toLowerCase())) { 
+                    setModal({ isOpen: true, type: 'alert', title: 'Username Taken', message: 'This username is already in use.', onConfirm: closeModal, confirmColor: 'red' });
+                    return; 
+                }
+                
+                const basePath = `artifacts/${fb.appId}/public/data`;
+                await fb.db.collection(`${basePath}/users`).add({ ...newUser, pin: hashedPin });
+                setNewUser({ name: '', username: '', pin: '', role: 'staff' });
+            };
+
+            const handleDeleteUser = (id) => {
+                if (users.length <= 1) { 
+                    setModal({ isOpen: true, type: 'alert', title: 'Action Denied', message: 'Cannot delete the last remaining user.', onConfirm: closeModal, confirmColor: 'red' });
+                    return; 
+                }
+                setModal({ isOpen: true, type: 'confirm', title: 'Remove Staff?', message: 'Revoke access for this user?', confirmColor: 'red', onConfirm: async () => { 
+                    const basePath = `artifacts/${fb.appId}/public/data`;
+                    await fb.db.collection(`${basePath}/users`).doc(id).delete(); 
+                    closeModal(); 
+                }});
+            };
+
+            const handleUpdateProfile = async (e) => {
+                e.preventDefault();
+                
+                const newPin = profileData.pin;
+                const updateData = { username: profileData.username };
+
+                if (newPin && newPin.length > 0) {
+                    const hashedPin = await hashPin(newPin);
+                      if (!hashedPin) {
+                        setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'New PIN hashing failed. Check PIN length.', onConfirm: closeModal, confirmColor: 'red' });
+                        return;
+                    }
+                    updateData.pin = hashedPin;
+                }
+
+                if (users.some(u => u.username.toLowerCase() === profileData.username.toLowerCase() && u.id !== user.id)) { 
+                    setModal({ isOpen: true, type: 'alert', title: 'Username Taken', message: 'This username is already in use by another staff.', onConfirm: closeModal, confirmColor: 'red' });
+                    return; 
+                }
+                
+                const basePath = `artifacts/${fb.appId}/public/data`;
+                await fb.db.collection(`${basePath}/users`).doc(user.id).update(updateData);
+                
+                const updatedUser = { ...user, ...updateData };
+                setUser(updatedUser);
+                setModal({ isOpen: true, type: 'alert', title: 'Updated', message: 'Credentials synced.', onConfirm: closeModal, confirmColor: 'logo-green' });
+            };
+            
+            const handleResetPin = async (e) => {
+                e.preventDefault();
+                const targetUser = editUserModal.user;
+                const newPin = editUserModal.newPin;
+
+                if (newPin.length < 4) {
+                    setModal({ isOpen: true, type: 'alert', title: 'PIN Error', message: 'New PIN must be at least 4 digits.', onConfirm: closeModal, confirmColor: 'red' });
+                    return;
+                }
+                
+                const hashedPin = await hashPin(newPin);
+                if (!hashedPin) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'PIN hashing failed.', onConfirm: closeModal, confirmColor: 'red' });
+                    return;
+                }
+
+                try {
+                    const basePath = `artifacts/${fb.appId}/public/data`;
+                    await fb.db.collection(`${basePath}/users`).doc(targetUser.id).update({ pin: hashedPin });
+                    
+                    setModal({ isOpen: true, type: 'alert', title: 'Success', message: `${targetUser.name}'s PIN has been reset.`, onConfirm: () => {
+                        setEditUserModal({ isOpen: false, user: null, newPin: '' });
+                        closeModal();
+                    }, confirmColor: 'logo-green' });
+                } catch (error) {
+                    setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'Failed to update PIN: ' + error.message, onConfirm: closeModal, confirmColor: 'red' });
+                }
+            };
+
+            // --- RENDER ---
+
+            // Admin Reset User Modal Component (Inner Component)
+            const AdminResetUserModal = ({ editUserModal, setEditUserModal, handleResetPin }) => {
+                if (!editUserModal.isOpen || !editUserModal.user) return null;
+
+                const user = editUserModal.user;
+                
+                return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 fade-in">
+                        <div className="bg-white rounded-xl p-6 w-full max-w-sm">
+                            <h3 className="text-xl font-bold text-logo-green-800 mb-4 flex items-center gap-2">
+                                <Icons.UserCog size={24}/> Reset Staff Credentials
+                            </h3>
+
+                            <div className="bg-slate-50 p-4 rounded-lg mb-4">
+                                <p className="text-xs text-slate-500 uppercase font-bold">Staff Name:</p>
+                                <p className="font-bold text-slate-800 text-lg mb-2">{user.name}</p>
+
+                                <p className="text-xs text-slate-500 uppercase font-bold">Username:</p>
+                                <p className="font-mono text-logo-green-700 text-sm">@{user.username}</p>
+                            </div>
+
+                            <form onSubmit={handleResetPin} className="space-y-4">
+                                <label className="block">
+                                    <span className="text-sm font-semibold text-slate-700 block mb-1">Set New PIN (4+ Digits)</span>
+                                    <input
+                                        required
+                                        type="password"
+                                        inputMode="numeric"
+                                        maxLength="4"
+                                        value={editUserModal.newPin}
+                                        onChange={(e) => setEditUserModal({ ...editUserModal, newPin: e.target.value })}
+                                        placeholder="Enter new 4-digit PIN"
+                                        className="w-full p-3 border rounded-lg font-mono focus:ring-2 focus:ring-logo-green-500"
+                                    />
+                                </label>
+
+                                <div className="flex justify-end gap-2 pt-2">
+                                    <button 
+                                        type="button"
+                                        onClick={closeEditUserModal} 
+                                        className="px-4 py-2 text-slate-500 rounded hover:bg-slate-100"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button 
+                                        type="submit" 
+                                        className="px-4 py-2 rounded text-white bg-logo-green-600 hover:bg-logo-green-700 font-bold"
+                                    >
+                                        Reset PIN
+                                    </button>
+                                </div>
+                            </form>
                         </div>
-                        <form onSubmit={handleLogin} className="space-y-4">
-                            <select required className="w-full p-3 border rounded-xl bg-slate-50" value={loginForm.branch} onChange={e=>setLoginForm({...loginForm, branch:e.target.value})}>
-                                <option value="">Select Branch Location</option>
-                                {BRANCHES.map(b=><option key={b} value={b}>{b}</option>)}
-                                <option value="ALL" className="font-bold">Owner View (All)</option>
-                            </select>
-                            <input required placeholder="Username" className="w-full p-3 border rounded-xl bg-slate-50" value={loginForm.username} onChange={e=>setLoginForm({...loginForm, username:e.target.value})}/>
-                            <input required type="password" inputMode="numeric" placeholder="PIN" className="w-full p-3 border rounded-xl bg-slate-50" value={loginForm.pin} onChange={e=>setLoginForm({...loginForm, pin:e.target.value})}/>
-                            <button disabled={loading} className="w-full bg-logo-green-700 text-white font-bold py-3 rounded-xl hover:bg-logo-green-800 transition flex justify-center">
-                                {loading ? <div className="loader border-t-white"></div> : 'Login'}
-                            </button>
-                        </form>
-                        {modal.isOpen && <div className="absolute inset-0 bg-white/90 flex items-center justify-center text-red-600 font-bold z-10 px-4 text-center fade-in" onClick={()=>setModal({isOpen:false})}>{modal.message}</div>}
+                    </div>
+                );
+            };
+
+            if (configError) return (
+                <div className="min-h-screen flex flex-col items-center justify-center bg-slate-100 text-center p-4">
+                    <div className="bg-white p-8 rounded-xl shadow-lg max-w-md">
+                        <Icons.Cloud size={48} className="mx-auto text-slate-400 mb-4"/>
+                        <h2 className="text-xl font-bold text-slate-800 mb-2">Setup Failed</h2>
+                        <p className="text-slate-500 text-sm mb-6 font-mono bg-slate-50 p-2 rounded border text-left text-xs">{configError}</p>
+                        <p className="text-xs text-slate-400">
+                            Check: 
+                            <ol className="list-decimal text-left pl-6 mt-2 space-y-1">
+                                <li>Did you create the Firestore Database?</li>
+                                <li>Did you enable Anonymous Authentication?</li>
+                                <li>Did you add the Vercel domain to Authorized Domains?</li>
+                            </ol>
+                        </p>
                     </div>
                 </div>
             );
 
-            // --- MAIN APP VIEW ---
-            const filteredTransactions = transactions.filter(t => 
-                (user.currentBranch === 'ALL' || t.branch === user.currentBranch) && 
-                (!showMyShift || user.role === 'admin' || t.recordedBy === user.name)
-            );
+            if (!dbReady) return <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50"><div className="loader mb-4"></div><p className="text-slate-400 text-sm">Connecting to Spa Cloud...</p></div>;
 
-            const revenue = filteredTransactions.reduce((sum, t) => sum + (t.status === 'completed' ? parseFloat(t.amount) : 0), 0);
-
-            return (
-                <div className="min-h-screen bg-slate-50 pb-20 fade-in font-sans text-slate-800">
-                    {/* Header */}
-                    <header className="bg-white border-b sticky top-0 z-20 shadow-sm px-4 py-3 flex justify-between items-center">
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 bg-logo-green-700 rounded-lg text-white shadow-md"><Icons.Home size={20}/></div>
-                            <div className="leading-tight">
-                                <h1 className="font-bold text-logo-green-900">At HOME Spa</h1>
-                                <p className="text-[10px] font-bold uppercase text-slate-400 tracking-wider flex gap-1"><Icons.MapPin size={10}/> {user.currentBranch}</p>
+            // LOGIN SCREEN
+            if (!user) {
+                return (
+                    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 fade-in">
+                        <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-sm border border-logo-green-100 text-center relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-logo-green-700 to-teal-600"></div>
+                            <div className="w-20 h-20 bg-logo-green-50 rounded-full flex items-center justify-center mx-auto mb-6 shadow-sm border border-logo-green-100">
+                                {/* Logo replaced with icon */}
+                                <Icons.Lock size={32} className="text-logo-green-700" />
                             </div>
+                            <h1 className="text-2xl font-bold text-logo-green-900 mb-1">At HOME Massage & Spa</h1>
+                            <p className="text-slate-500 mb-6 text-sm">Staff Portal</p>
+                            
+                            <form onSubmit={handleLoginSubmit} className="space-y-4">
+                                <div className="relative">
+                                    <Icons.MapPin size={18} className="absolute left-3 top-3.5 text-slate-400" />
+                                    <select required value={loginBranch} onChange={(e)=>setLoginBranch(e.target.value)} className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-logo-green-700 bg-slate-50 focus:bg-white appearance-none text-slate-600">
+                                        <option value="" disabled>Select Branch Location</option>
+                                        {BRANCHES.map(b => <option key={b} value={b}>{b}</option>)}
+                                        <option value="ALL" className="font-bold text-logo-green-700">ALL BRANCHES (Owner View)</option>
+                                    </select>
+                                    <Icons.ChevronDown size={16} className="absolute right-3 top-4 text-slate-400 pointer-events-none"/>
+                                </div>
+                                <div className="relative"><Icons.User size={18} className="absolute left-3 top-3.5 text-slate-400" /><input required value={loginUsername} onChange={(e)=>setLoginUsername(e.target.value)} placeholder="Username" className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-logo-green-700 bg-slate-50 focus:bg-white" /></div>
+                                <div className="relative"><Icons.Fingerprint size={18} className="absolute left-3 top-3.5 text-slate-400" /><input required type="password" inputMode="numeric" value={loginPin} onChange={(e)=>setLoginPin(e.target.value)} placeholder="PIN" className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-logo-green-700 bg-slate-50 focus:bg-white" /></div>
+                                <button className="w-full bg-logo-green-700 text-white font-bold py-3 rounded-xl hover:bg-logo-green-600 transition-all shadow-lg shadow-logo-green-200 mt-2">Login</button>
+                            </form>
+                            {!isOnline && <p className="mt-4 text-xs text-red-400 flex items-center justify-center gap-1"><Icons.WifiOff size={12}/> You are offline</p>}
                         </div>
-                        <button onClick={()=>setUser(null)} className="p-2 text-slate-300 hover:text-red-500"><Icons.LogOut/></button>
+                        {modal.isOpen && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60"><div className="bg-white rounded-xl p-6 max-w-sm"><h3 className="font-bold mb-2">{modal.title}</h3><p className="mb-4 text-sm">{modal.message}</p><div className="flex gap-2 justify-end">{modal.type==='confirm'&&<button onClick={closeModal} className="px-4 py-2 text-slate-500">Cancel</button>}<button onClick={modal.onConfirm||closeModal} className={`px-4 py-2 rounded text-white ${modal.confirmColor==='red'?'bg-red-500':'bg-logo-green-600'}`}>Okay</button></div></div></div>}
+                    </div>
+                );
+            }
+
+            // DASHBOARD
+            return (
+                <div className="min-h-screen bg-slate-50 font-sans text-slate-800 pb-24 relative fade-in">
+                    <header className="bg-white border-b border-logo-green-100 sticky top-0 z-20 shadow-sm">
+                        <div className="max-w-3xl mx-auto px-4 py-3 flex justify-between items-center">
+                            <div className="flex items-center gap-3">
+                                {/* Logo replaced with icon */}
+                                <div className={`p-2 rounded-lg shadow-md ${user.role==='admin'?'bg-logo-green-700 shadow-logo-green-200':'bg-slate-600 shadow-slate-200'}`}><Icons.Home size={22} className="text-white"/></div>
+                                <div>
+                                    <h1 className="text-lg font-bold text-logo-green-800 leading-tight">At HOME Massage & Spa</h1>
+                                    <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                                        <span className="bg-logo-green-100 text-logo-green-700 px-2 py-0.5 rounded flex items-center gap-1"><Icons.MapPin size={10}/> {user.currentBranch}</span>
+                                        <span className="flex items-center gap-1"><Icons.UserCircle2 size={10}/> {user.name}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <button onClick={()=>{setUser(null); setView('dashboard');}} className="p-2 text-slate-400 hover:text-red-500 rounded-lg"><Icons.LogOut size={20}/></button>
+                        </div>
+                        {!isOnline && <div className="bg-red-500 text-white text-xs text-center py-1">No Internet - Sync Paused</div>}
                     </header>
 
-                    {/* Nav */}
-                    <div className="px-4 py-4 overflow-x-auto flex gap-2 sticky top-[65px] z-10 bg-slate-50/90 backdrop-blur">
-                        {[
-                            {id:'dashboard', icon:Icons.LayoutDashboard, label:'Daily'},
-                            {id:'add', icon:Icons.Plus, label:'Booking'},
-                            {id:'profile', icon:Icons.UserCog, label:'Profile'}
-                        ].map(nav => (
-                            <button key={nav.id} onClick={()=>setView(nav.id)} className={`px-4 py-2 rounded-full text-xs font-bold flex items-center gap-2 transition shadow-sm ${view===nav.id ? 'bg-white text-logo-green-700 ring-1 ring-logo-green-200' : 'bg-slate-200 text-slate-500'}`}>
-                                <nav.icon size={14}/> {nav.label}
-                            </button>
-                        ))}
-                        {user.role === 'admin' && [
-                            {id:'lists', icon:Icons.ShieldCheck, label:'Lists'},
-                            {id:'history', icon:Icons.History, label:'History'},
-                            {id:'team', icon:Icons.Users, label:'Team'}
-                        ].map(nav => (
-                            <button key={nav.id} onClick={()=>{setView(nav.id); if(nav.id==='history') loadHistory();}} className={`px-4 py-2 rounded-full text-xs font-bold flex items-center gap-2 transition shadow-sm ${view===nav.id ? 'bg-white text-logo-green-700 ring-1 ring-logo-green-200' : 'bg-slate-200 text-slate-500'}`}>
-                                <nav.icon size={14}/> {nav.label}
-                            </button>
-                        ))}
-                    </div>
+                    <main className="max-w-3xl mx-auto px-4 py-6">
+                        <div className="flex p-1 bg-slate-200/60 rounded-xl mb-6 sticky top-[70px] z-10 backdrop-blur-sm overflow-x-auto">
+                            <button onClick={()=>setView('dashboard')} className={`flex-1 min-w-[70px] py-2.5 text-xs font-semibold rounded-lg flex flex-col sm:flex-row items-center justify-center gap-1 ${view==='dashboard'?'bg-white text-logo-green-700 shadow-sm':'text-slate-500'}`}><Icons.LayoutDashboard size={16}/> Daily</button>
+                            <button onClick={()=>setView('add')} className={`flex-1 min-w-[70px] py-2.5 text-xs font-semibold rounded-lg flex flex-col sm:flex-row items-center justify-center gap-1 ${view==='add'?'bg-white text-logo-green-700 shadow-sm':'text-slate-500'}`}><Icons.Plus size={16}/> Booking</button>
+                            <button onClick={()=>setView('profile')} className={`flex-1 min-w-[70px] py-2.5 text-xs font-semibold rounded-lg flex flex-col sm:flex-row items-center justify-center gap-1 ${view==='profile'?'bg-white text-logo-green-700 shadow-sm':'text-slate-500'}`}><Icons.UserCog size={16}/> Profile</button>
+                            {user.role === 'admin' && (
+                                <>
+                                    <button onClick={()=>setView('lists')} className={`flex-1 min-w-[70px] py-2.5 text-xs font-semibold rounded-lg flex flex-col sm:flex-row items-center justify-center gap-1 ${view==='lists'?'bg-white text-logo-green-700 shadow-sm':'text-slate-500'}`}><Icons.ShieldCheck size={16}/> Lists</button>
+                                    <button onClick={()=>setView('history')} className={`flex-1 min-w-[70px] py-2.5 text-xs font-semibold rounded-lg flex flex-col sm:flex-row items-center justify-center gap-1 ${view==='history'?'bg-white text-logo-green-700 shadow-sm':'text-slate-500'}`}><Icons.History size={16}/> History</button>
+                                    <button onClick={()=>setView('team')} className={`flex-1 min-w-[70px] py-2.5 text-xs font-semibold rounded-lg flex flex-col sm:flex-row items-center justify-center gap-1 ${view==='team'?'bg-white text-logo-green-700 shadow-sm':'text-slate-500'}`}><Icons.Users size={16}/> Team</button>
+                                </>
+                            )}
+                        </div>
 
-                    {/* Content */}
-                    <main className="px-4 max-w-3xl mx-auto">
                         {view === 'dashboard' && (
-                            <div className="space-y-4 fade-in">
-                                <div className="bg-gradient-to-r from-logo-green-700 to-teal-600 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
-                                    <div className="relative z-10">
-                                        <p className="text-xs font-medium opacity-80 uppercase tracking-widest mb-1">Total Revenue</p>
-                                        <h2 className="text-3xl font-bold">{formatCurrency(revenue)}</h2>
-                                        <p className="text-xs mt-2 opacity-70">{filteredTransactions.length} Clients Today</p>
-                                    </div>
-                                    <Icons.DollarSign size={100} className="absolute -right-4 -bottom-8 text-white opacity-10"/>
+                            <div className="space-y-6 fade-in">
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="bg-white p-4 rounded-xl shadow-sm border border-logo-green-100"><p className="text-slate-500 text-xs font-medium uppercase">Sales ({user.currentBranch})</p><h3 className="text-2xl font-bold text-slate-800 mt-1">{formatCurrency(stats.totalRevenue)}</h3></div>
+                                    <div className="bg-white p-4 rounded-xl shadow-sm border border-logo-green-100"><p className="text-slate-500 text-xs font-medium uppercase">Unpaid</p><h3 className="text-2xl font-bold text-slate-800 mt-1">{formatCurrency(stats.pendingValue)}</h3></div>
                                 </div>
 
-                                <div className="flex justify-between items-end">
-                                    <h3 className="font-bold text-slate-700 flex items-center gap-2"><Icons.Clock size={16}/> Today's Schedule</h3>
-                                    {user.role === 'admin' && <button onClick={closeDay} className="text-[10px] bg-white border border-slate-200 px-3 py-1 rounded-full font-bold hover:bg-red-50 hover:text-red-600 transition">Close Day</button>}
-                                </div>
-
-                                <div className="space-y-3">
-                                    {filteredTransactions.length === 0 ? <div className="text-center p-10 border-2 border-dashed rounded-xl text-slate-400 text-sm">No bookings yet.</div> : 
-                                    filteredTransactions.map(t => (
-                                        <div key={t.id} className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-l-logo-green-500 flex justify-between items-center">
-                                            <div>
-                                                <div className="flex items-center gap-2 mb-1">
-                                                    <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 rounded">{t.time}</span>
-                                                    <span className="text-[10px] font-bold text-logo-green-700 uppercase">{t.branch}</span>
+                                <div className="bg-white p-4 rounded-xl shadow-sm border border-logo-green-100">
+                                    <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2"><Icons.Trophy size={16} className="text-logo-green-700"/> Therapist Handles (Today)</h3>
+                                    
+                                    {Object.keys(therapistStats).length === 0 ? (
+                                        <p className="text-sm text-slate-400 italic text-center py-2">No activity yet.</p>
+                                    ) : (
+                                        Object.keys(therapistStats).sort((a, b) => {
+                                             const idxA = BRANCHES.indexOf(a);
+                                             const idxB = BRANCHES.indexOf(b);
+                                             if (idxA === -1 && idxB === -1) return a.localeCompare(b);
+                                             if (idxA === -1) return 1;
+                                             if (idxB === -1) return -1;
+                                             return idxA - idxB;
+                                         }).map(branch => (
+                                            <div key={branch} className="mb-4 last:mb-0">
+                                                {(user.currentBranch === 'ALL' || Object.keys(therapistStats).length > 1) && (
+                                                    <h4 className="text-[10px] font-bold text-logo-green-700 uppercase mb-2 bg-logo-green-50 px-2 py-1 rounded inline-block">
+                                                        {branch}
+                                                    </h4>
+                                                )}
+                                                <div className="space-y-2">
+                                                    {therapistStats[branch].map((s) => (
+                                                        <div key={s.name} className="flex justify-between items-center pb-2 border-b border-slate-50 last:border-0 last:pb-0 ml-1">
+                                                            <div className="flex gap-2 items-center">
+                                                                <span className="w-6 h-6 bg-logo-green-100 text-logo-green-700 rounded-full flex items-center justify-center text-[10px] font-bold">{s.name.charAt(0)}</span>
+                                                                <span className="text-sm font-semibold text-slate-700">{s.name}</span>
+                                                            </div>
+                                                            <div className="text-right flex flex-col">
+                                                                <span className="text-sm font-bold text-logo-green-700">{s.count} <span className="text-[9px] font-normal text-slate-400 uppercase">Handles</span></span>
+                                                                {user.role === 'admin' && <span className="text-[9px] text-slate-400">{formatCurrency(s.amount)}</span>}
+                                                            </div>
+                                                        </div>
+                                                    ))}
                                                 </div>
-                                                <h4 className="font-bold text-slate-800">{t.clientName}</h4>
-                                                <p className="text-xs text-slate-500">{t.service} {t.duration ? `• ${t.duration}` : ''}</p>
                                             </div>
-                                            <div className="text-right">
-                                                <div className="font-bold">{formatCurrency(t.amount)}</div>
-                                                {user.role === 'admin' && <button onClick={()=>handleListDelete('transaction', t.id)} className="text-xs text-red-300 hover:text-red-500 mt-1">Delete</button>}
-                                            </div>
+                                        ))
+                                    )}
+                                </div>
+
+                                <div>
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h2 className="text-lg font-bold text-logo-green-900 flex gap-2">
+                                            <Icons.LayoutDashboard size={18}/> Live Schedule ({showMyShift ? 'My Shift' : user.currentBranch})
+                                        </h2>
+                                        <div className="flex items-center gap-2">
+                                            {user.role !== 'admin' && (
+                                                <button 
+                                                    onClick={() => setShowMyShift(!showMyShift)}
+                                                    className={`text-[10px] font-bold ${showMyShift ? 'bg-logo-green-700 text-white' : 'bg-logo-green-50 text-logo-green-700'} px-3 py-1.5 rounded-full border border-logo-green-200 flex gap-1 items-center transition-colors`}
+                                                >
+                                                    <Icons.User size={12}/> {showMyShift ? 'Showing My Shift' : 'Show Only Mine'}
+                                                </button>
+                                            )}
+                                            {user.role === 'admin' && (
+                                                <button onClick={requestEndDay} className="text-[10px] font-bold text-logo-green-700 bg-logo-green-50 px-3 py-1.5 rounded-full border border-logo-green-200 flex gap-1"><Icons.Archive size={12}/> End Day</button>
+                                            )}
                                         </div>
-                                    ))}
+                                    </div>
+                                    {filteredTransactions.length===0?<div className="text-center py-12 border border-dashed rounded-xl text-slate-400 text-sm">No bookings found for the current filter.</div>:
+                                    <div className="space-y-3">
+                                        {filteredTransactions.map(t=>(
+                                            <div key={t.id} className={`bg-white p-4 rounded-xl border-l-[6px] flex justify-between items-center ${t.status==='completed'?'border-l-logo-green-500':'border-l-orange-400'} shadow-sm`}>
+                                                <div className="flex-1">
+                                                    {/* Displaying timestamp date for consistency */}
+                                                    <div className="flex gap-2 mb-1 items-center">
+                                                        <span className="text-[10px] font-bold bg-slate-100 px-2 rounded text-slate-500">{t.branch}</span>
+                                                        <span className="text-xs font-mono text-slate-400">{formatDate(t.timestamp)} - {t.time}</span>
+                                                    </div>
+                                                    <h3 className="font-bold text-slate-800">{t.clientName}</h3>
+                                                    <div className="text-xs text-slate-500 mt-1 flex gap-2 flex-wrap">
+                                                        <span>{t.service}</span>
+                                                        {t.duration && <span> • {t.duration}</span>}
+                                                        <span> • {t.therapist}</span>
+                                                    </div>
+                                                </div>
+                                                <div className="text-right"><div className="font-bold text-lg">{formatCurrency(t.amount)}</div><div className="flex justify-end gap-2 mt-1"><button onClick={()=>toggleStatus(t)} className={`p-1.5 rounded-full ${t.status==='completed'?'bg-logo-green-100 text-logo-green-700':'bg-orange-100 text-orange-600'}`}>{t.status==='completed'?<Icons.CheckCircle2 size={16}/>:<Icons.DollarSign size={16}/>}</button>{user.role==='admin'&&<button onClick={()=>requestDelete(t.id)} className="p-1.5 text-slate-300 hover:text-red-500"><Icons.Trash2 size={16}/></button>}</div></div>
+                                            </div>
+                                        ))}
+                                    </div>}
                                 </div>
                             </div>
                         )}
 
                         {view === 'add' && (
-                            <div className="bg-white p-6 rounded-2xl shadow-sm border border-logo-green-100 fade-in relative">
-                                {loading && <div className="absolute inset-0 bg-white/80 z-10 flex items-center justify-center"><div className="loader"></div></div>}
-                                <h2 className="font-bold text-lg mb-4 flex gap-2 items-center"><Icons.Plus className="text-logo-green-600"/> New Booking</h2>
-                                <form onSubmit={handleBooking} className="space-y-4">
-                                    {user.currentBranch === 'ALL' ? 
-                                        <select className="w-full p-3 border rounded-xl bg-slate-50" required value={bookingForm.targetBranch} onChange={e=>setBookingForm({...bookingForm, targetBranch:e.target.value})}>
-                                            <option value="">Select Target Branch</option>
-                                            {BRANCHES.map(b=><option key={b} value={b}>{b}</option>)}
-                                        </select>
-                                    : <div className="p-3 bg-slate-100 rounded-xl text-xs font-bold text-slate-500 text-center">Adding to: {user.currentBranch}</div>}
+                            <div className="bg-white rounded-2xl shadow-sm border border-logo-green-100 p-6 fade-in">
+                                <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Icons.Plus size={24} className="text-logo-green-700"/> New Booking</h2>
+                                <form onSubmit={handleSubmit} className="space-y-5">
                                     
-                                    <input required placeholder="Client Name" className="w-full p-3 border rounded-xl" value={bookingForm.clientName} onChange={e=>setBookingForm({...bookingForm, clientName:e.target.value})}/>
-                                    
-                                    <div className="space-y-3">
-                                        <select required className="w-full p-3 border rounded-xl bg-white" value={bookingForm.service} onChange={e => {
-                                            const sName = e.target.value;
-                                            // Logic: Check if duration already picked, update price
-                                            const newPrice = calculatePrice(sName, bookingForm.duration);
-                                            setBookingForm({...bookingForm, service:sName, amount: newPrice});
-                                        }}>
-                                            <option value="">Select Service</option>
-                                            {services.map(s=><option key={s.id} value={s.name}>{s.name}</option>)}
-                                        </select>
-
-                                        <select className="w-full p-3 border rounded-xl bg-white" value={bookingForm.duration} onChange={e => {
-                                            const dName = e.target.value;
-                                            const newPrice = calculatePrice(bookingForm.service, dName);
-                                            setBookingForm({...bookingForm, duration:dName, amount: newPrice});
-                                        }}>
-                                            <option value="">Select Duration</option>
-                                            {durations.map(d=><option key={d.id} value={d.name}>{d.name}</option>)}
-                                        </select>
-
-                                        <select required className="w-full p-3 border rounded-xl bg-white" value={bookingForm.therapist} onChange={e=>setBookingForm({...bookingForm, therapist:e.target.value})}>
-                                            <option value="">Select Therapist</option>
-                                            {therapists.map(t=><option key={t.id} value={t.name}>{t.name}</option>)}
-                                        </select>
-                                    </div>
+                                    {/* Conditional Branch Selector for Owner Admin */}
+                                    {user.currentBranch === 'ALL' ? (
+                                        <div className="relative">
+                                            <Icons.MapPin size={18} className="absolute left-3 top-3.5 text-slate-400" />
+                                            <select 
+                                                required 
+                                                value={formData.targetBranch} 
+                                                onChange={(e)=>setFormData({...formData, targetBranch:e.target.value})} 
+                                                className="w-full pl-10 pr-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-logo-green-700 bg-slate-50 focus:bg-white appearance-none text-slate-600 font-bold border-logo-green-400"
+                                            >
+                                                <option value="" disabled>SELECT TARGET BRANCH*</option>
+                                                {BRANCHES.map(b => <option key={b} value={b}>{b}</option>)}
+                                            </select>
+                                            <Icons.ChevronDown size={16} className="absolute right-3 top-4 text-slate-400 pointer-events-none"/>
+                                        </div>
+                                    ) : (
+                                        <div className="p-3 bg-logo-green-50 rounded-lg text-sm text-logo-green-800 font-medium flex items-center gap-2"><Icons.MapPin size={16}/> Adding to: {user.currentBranch}</div>
+                                    )}
 
                                     <div className="grid grid-cols-2 gap-4">
-                                        <input required type="number" placeholder="Price" className="w-full p-3 border rounded-xl" value={bookingForm.amount} onChange={e=>setBookingForm({...bookingForm, amount:e.target.value})}/>
-                                        <input required type="time" className="w-full p-3 border rounded-xl" value={bookingForm.time} onChange={e=>setBookingForm({...bookingForm, time:e.target.value})}/>
+                                        <label className={`border-2 rounded-xl p-3 flex flex-col items-center gap-2 ${formData.type==='booking'?'border-logo-green-700 bg-logo-green-50/50':'border-slate-100'}`}><input type="radio" name="type" value="booking" checked={formData.type==='booking'} onChange={(e)=>setFormData({...formData, type:e.target.value})} className="hidden"/><Icons.Calendar/><span className="text-sm font-bold">Appointment</span></label>
+                                        <label className={`border-2 rounded-xl p-3 flex flex-col items-center gap-2 ${formData.type==='sale'?'border-teal-600 bg-teal-50/50':'border-slate-100'}`}><input type="radio" name="type" value="sale" checked={formData.type==='sale'} onChange={(e)=>setFormData({...formData, type:e.target.value})} className="hidden"/><Icons.DollarSign/><span className="text-sm font-bold">Direct Pay</span></label>
                                     </div>
+                                    <input required placeholder="Client Name*" value={formData.clientName} onChange={e=>setFormData({...formData, clientName:e.target.value})} className="w-full p-3 border rounded-xl bg-slate-50"/>
+                                    
+                                    <div className="space-y-4">
+                                        {/* Service Dropdown - Fixed */}
+                                        <select required value={formData.service} onChange={e=>handleServiceChange(e.target.value)} className="w-full p-3 border rounded-xl bg-slate-50 appearance-none">
+                                            <option value="" disabled>Select Service*</option>
+                                            {servicesList.map(s => <option key={s.id} value={s.name}>{s.name} {s.price ? `(${formatCurrency(s.price)})` : ''}</option>)}
+                                        </select>
+                                        
+                                        {/* Duration Dropdown - Fixed */}
+                                        <select value={formData.duration} onChange={e=>handleDurationChange(e.target.value)} className="w-full p-3 border rounded-xl bg-slate-50 appearance-none">
+                                            <option value="" disabled>Select Duration</option>
+                                            {durationsList.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
+                                        </select>
 
-                                    <button className="w-full bg-logo-green-700 text-white font-bold py-4 rounded-xl shadow hover:bg-logo-green-800 transition">Confirm Booking</button>
+                                        {/* Therapist Dropdown */}
+                                        <select required value={formData.therapist} onChange={e=>setFormData({...formData, therapist:e.target.value})} className="w-full p-3 border rounded-xl bg-slate-50 appearance-none">
+                                            <option value="" disabled>Select Therapist*</option>
+                                            {therapistsList.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+                                        </select>
+                                    </div>
+                                    
+                                    <div className="grid grid-cols-2 gap-4">
+                                        {/* Price is now editable and required, auto-filled by service selection */}
+                                        <input required 
+                                            type="number" step="0.01" 
+                                            placeholder="Price (P)*" 
+                                            value={formData.amount} 
+                                            onChange={e=>setFormData({...formData, amount:e.target.value})} 
+                                            className="w-full p-3 border rounded-xl bg-slate-50"
+                                        />
+                                        <input type="time" value={formData.time} onChange={e=>setFormData({...formData, time:e.target.value})} className="w-full p-3 border rounded-xl bg-slate-50"/>
+                                    </div>
+                                    <button className="w-full bg-logo-green-700 text-white font-bold py-4 rounded-xl shadow-lg mt-2">Save Booking</button>
                                 </form>
                             </div>
                         )}
 
-                        {view === 'lists' && user.role === 'admin' && <ListManagement therapists={therapists} services={services} durations={durations} onAdd={handleListAdd} onDelete={handleListDelete} onEdit={handleListEdit}/>}
+                        {view === 'profile' && (
+                            <div className="bg-white rounded-xl shadow-sm border border-logo-green-100 p-6 fade-in">
+                                <h3 className="font-bold text-slate-800 mb-4 flex gap-2"><Icons.UserCog className="text-logo-green-700"/> Profile</h3>
+                                <div className="bg-slate-50 p-4 rounded-xl border mb-6"><p className="text-xs text-slate-400 uppercase font-bold">Account</p><p className="font-bold text-logo-green-800 text-lg">{user.name}</p></div>
+                                <form onSubmit={handleUpdateProfile} className="space-y-4">
+                                    <input required value={profileData.username} onChange={e=>setProfileData({...profileData, username:e.target.value})} className="w-full p-3 border rounded-lg" placeholder="New Username"/>
+                                    <input type="password" inputMode="numeric" maxLength="4" value={profileData.pin} onChange={e=>setProfileData({...profileData, pin:e.target.value})} className="w-full p-3 border rounded-lg font-mono" placeholder="New PIN (Leave blank to keep old)"/>
+                                    <button className="w-full bg-logo-green-700 text-white font-bold py-3 rounded-lg">Update Credentials</button>
+                                </form>
+                            </div>
+                        )}
+                        
+                        {/* Data List Management View */}
+                        {view === 'lists' && user.role === 'admin' && (
+                            <ListManagement 
+                                therapists={therapistsList} 
+                                services={servicesList}
+                                durations={durationsList}
+                                onAdd={handleAddItem} 
+                                onDelete={handleDeleteItem}
+                                onEdit={handleEditItem}
+                            />
+                        )}
 
-                        {view === 'history' && user.role === 'admin' && (
-                            <div className="space-y-4 fade-in">
-                                <div className="flex justify-between items-center">
-                                    <h2 className="font-bold text-lg">History Archive</h2>
-                                    <button onClick={()=>loadHistory(50)} className="text-xs bg-slate-200 px-3 py-1 rounded-full hover:bg-slate-300"><Icons.RotateCw size={12}/> Refresh</button>
-                                </div>
-                                {loading ? <div className="text-center py-10"><div className="loader mx-auto"></div></div> : 
-                                 history.length === 0 ? <p className="text-center text-slate-400 py-10">No history found.</p> :
-                                 history.map(h => (
-                                    <div key={h.id} className="bg-white rounded-xl shadow-sm border overflow-hidden">
-                                        <div onClick={()=>setHistoryExpanded(historyExpanded===h.id?null:h.id)} className="p-4 flex justify-between items-center cursor-pointer hover:bg-slate-50">
-                                            <div><h4 className="font-bold">{h.date}</h4><p className="text-xs text-slate-400">{h.branch} • {h.closedBy}</p></div>
-                                            <div className="flex items-center gap-3">
-                                                <span className="font-bold text-logo-green-700">{formatCurrency(h.stats?.totalRevenue)}</span>
-                                                <button onClick={(e)=>{e.stopPropagation(); downloadCSV(h)}}><Icons.Download size={16} className="text-slate-400 hover:text-logo-green-600"/></button>
+                        {view === 'team' && user.role === 'admin' && (
+                            <div className="space-y-6 fade-in">
+                                <h2 className="text-lg font-bold text-logo-green-900 flex gap-2"><Icons.Users/> Manage Staff</h2>
+                                <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
+                                    {users.filter(u => {
+                                        // Owner Admin sees everyone
+                                        if (user.username === 'admin') {
+                                            return true;
+                                        }
+
+                                        // Regular Admin/Staff only sees staff accounts OR themselves
+                                        return u.id === user.id || u.role === 'staff';
+                                    }).map(u=>(
+                                        <div 
+                                            key={u.id} 
+                                            className="p-4 border-b flex justify-between items-center hover:bg-slate-50 transition"
+                                        >
+                                            <div>
+                                                <h3 className="font-bold">{u.name} {u.username === 'admin' && <span className="text-xs font-mono text-logo-green-700 bg-logo-green-100 px-1 rounded-sm">OWNER</span>}</h3>
+                                                <p className="text-xs text-slate-400">
+                                                    @{u.username} • HASHED PIN
+                                                </p>
+                                            </div>
+                                            <div className="flex gap-2 items-center">
+                                                {/* Explicit View/Reset PIN button (Owner Admin only) */}
+                                                {user.username === 'admin' && (
+                                                    <button
+                                                        onClick={(e)=>{e.stopPropagation(); setEditUserModal({ isOpen: true, user: u, newPin: '' });}}
+                                                        className="text-slate-300 hover:text-logo-green-700 p-1"
+                                                        title="View Username / Reset PIN"
+                                                    >
+                                                        <Icons.Lock size={16}/>
+                                                    </button>
+                                                )}
+
+                                                {/* Delete button visible to all Admins */}
+                                                {user.role === 'admin' && (
+                                                    <button 
+                                                        onClick={(e)=>{e.stopPropagation(); handleDeleteUser(u.id)}} 
+                                                        className="text-slate-300 hover:text-red-500 p-1"
+                                                        title="Delete User"
+                                                    >
+                                                        <Icons.Trash2 size={16}/>
+                                                    </button>
+                                                )}
                                             </div>
                                         </div>
-                                        {historyExpanded===h.id && <div className="bg-slate-50 p-4 text-sm border-t border-slate-100">
-                                            {h.transactions.map((t,i)=>(
-                                                <div key={i} className="flex justify-between py-1 border-b border-slate-200/50 last:border-0">
-                                                    <span className="text-slate-600">{t.time} - {t.clientName} ({t.service})</span>
-                                                    <span className="font-medium">{formatCurrency(t.amount)}</span>
-                                                </div>
-                                            ))}
-                                        </div>}
-                                    </div>
-                                ))}
+                                    ))}
+                                </div>
+                                <div className="bg-white rounded-xl shadow-sm border p-6">
+                                    <h3 className="font-bold mb-4">Add Staff</h3>
+                                    <form onSubmit={handleAddUser} className="space-y-4">
+                                        <input required placeholder="Name" value={newUser.name} onChange={e=>setNewUser({...newUser, name:e.target.value})} className="w-full p-2 border rounded"/>
+                                        <input required placeholder="Username" value={newUser.username} onChange={e=>setNewUser({...newUser, username:e.target.value})} className="w-full p-2 border rounded"/>
+                                        <div className="flex gap-2"><input required maxLength="4" placeholder="PIN (Min 4 digits)" type="password" inputMode="numeric" value={newUser.pin} onChange={e=>setNewUser({...newUser, pin:e.target.value})} className="w-full p-2 border rounded"/><select value={newUser.role} onChange={e=>setNewUser({...newUser, role:e.target.value})} className="w-full p-2 border rounded"><option value="staff">Staff</option><option value="admin">Admin</option></select></div>
+                                        <button className="w-full bg-logo-green-700 text-white py-2 rounded font-bold">Add User</button>
+                                    </form>
+                                </div>
                             </div>
                         )}
 
-                        {/* Modals */}
-                        {modal.isOpen && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 fade-in"><div className="bg-white rounded-xl p-6 max-w-xs w-full text-center"><p className={`font-bold mb-4 text-${modal.confirmColor}-600`}>{modal.message}</p><button onClick={()=>setModal({isOpen:false})} className="bg-slate-100 px-6 py-2 rounded-full font-bold text-slate-600">Close</button></div></div>}
+                        {view === 'history' && user.role === 'admin' && (
+                            <div className="space-y-4 fade-in">
+                                <h2 className="text-lg font-bold text-logo-green-900 flex gap-2"><Icons.History/> History</h2>
+                                
+                                {/* Date Range Filters */}
+                                <div className="bg-white p-4 rounded-xl shadow-sm border border-logo-green-100 grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-500 mb-1">Start Date</label>
+                                        <input type="date" value={historyStartDate} onChange={(e) => setHistoryStartDate(e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50 text-sm"/>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-500 mb-1">End Date</label>
+                                        <input type="date" value={historyEndDate} onChange={(e) => setHistoryEndDate(e.target.value)} className="w-full p-2 border rounded-lg bg-slate-50 text-sm"/>
+                                    </div>
+                                </div>
+
+                                {filteredHistory.length === 0 ? (
+                                    <div className="text-center py-12 border border-dashed rounded-xl text-slate-400 text-sm">No historical reports found for this period.</div>
+                                ) : (
+                                    filteredHistory.map(h => (
+                                        <div key={h.id} className="bg-white rounded-xl shadow-sm border overflow-hidden">
+                                            <div onClick={()=>setExpandedHistoryId(expandedHistoryId===h.id?null:h.id)} className="p-4 flex justify-between items-center cursor-pointer">
+                                                <div><h3 className="font-bold text-slate-800">{h.date}</h3><p className="text-xs text-slate-400">{h.branch || 'Unknown'} • Closed by {h.closedBy}</p></div>
+                                                <div className="flex items-center gap-4">
+                                                    <button onClick={(e)=>{e.stopPropagation();downloadCSV(h)}} title="Download CSV"><Icons.Download size={20} className="text-slate-400 hover:text-logo-green-700"/></button>
+                                                    <button onClick={(e)=>{e.stopPropagation();handleDeleteHistory(h.id, h.date)}} title="Delete Report"><Icons.Trash2 size={20} className="text-slate-400 hover:text-red-500"/></button>
+                                                    <span className="font-bold text-logo-green-700">{formatCurrency(h.stats.totalRevenue)}</span>
+                                                    {expandedHistoryId===h.id?<Icons.ChevronUp size={20} className="text-slate-400"/>:<Icons.ChevronDown size={20} className="text-slate-400"/>}
+                                                </div>
+                                            </div>
+                                            {expandedHistoryId===h.id && <div className="bg-slate-50 p-4 border-t text-sm">{h.transactions.map((t,i)=><div key={i} className="flex justify-between py-2 border-b last:border-0"><span>{t.time} - {t.clientName} ({t.service})</span><span className="font-bold">{formatCurrency(t.amount)}</span></div>)}</div>}
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        )}
+
+                        {/* Global Modal */}
+                        {modal.isOpen && <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60"><div className="bg-white rounded-xl p-6 max-w-sm"><h3 className="font-bold mb-2">{modal.title}</h3><p className="mb-4 text-sm">{modal.message}</p><div className="flex gap-2 justify-end">{modal.type==='confirm'&&<button onClick={closeModal} className="px-4 py-2 text-slate-500">Cancel</button>}<button onClick={modal.onConfirm||closeModal} className={`px-4 py-2 rounded text-white ${modal.confirmColor==='red'?'bg-red-500':'bg-logo-green-600'}`}>Okay</button></div></div></div>}
                     </main>
+                    {view === 'dashboard' && <button onClick={()=>setView('add')} className="fixed bottom-6 right-6 bg-logo-green-700 text-white p-4 rounded-full shadow-lg hover:scale-105 transition-transform"><Icons.Plus size={28}/></button>}
+
+                    {/* Admin Reset User Modal is rendered inside App component now */}
+                    <AdminResetUserModal 
+                        editUserModal={editUserModal} 
+                        setEditUserModal={setEditUserModal} 
+                        handleResetPin={handleResetPin}
+                    />
                 </div>
             );
         };
+        
+        // NEW: Admin Reset User Modal Component (Defined outside of the main App function)
+        const AdminResetUserModal = ({ editUserModal, setEditUserModal, handleResetPin }) => {
+            if (!editUserModal.isOpen || !editUserModal.user) return null;
+
+            const user = editUserModal.user;
+            
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 fade-in">
+                    <div className="bg-white rounded-xl p-6 w-full max-w-sm">
+                        <h3 className="text-xl font-bold text-logo-green-800 mb-4 flex items-center gap-2">
+                            <Icons.UserCog size={24}/> Reset Staff Credentials
+                        </h3>
+
+                        <div className="bg-slate-50 p-4 rounded-lg mb-4">
+                            <p className="text-xs text-slate-500 uppercase font-bold">Staff Name:</p>
+                            <p className="font-bold text-slate-800 text-lg mb-2">{user.name}</p>
+
+                            <p className="text-xs text-slate-500 uppercase font-bold">Username:</p>
+                            <p className="font-mono text-logo-green-700 text-sm">@{user.username}</p>
+                        </div>
+
+                        <form onSubmit={(e) => {
+                            e.preventDefault();
+                            // Call the handler provided by the parent App component
+                            handleResetPin(e);
+                        }} className="space-y-4">
+                            <label className="block">
+                                <span className="text-sm font-semibold text-slate-700 block mb-1">Set New PIN (4+ Digits)</span>
+                                <input
+                                    required
+                                    type="password"
+                                    inputMode="numeric"
+                                    maxLength="4"
+                                    value={editUserModal.newPin}
+                                    onChange={(e) => setEditUserModal({ ...editUserModal, newPin: e.target.value })}
+                                    placeholder="Enter new 4-digit PIN"
+                                    className="w-full p-3 border rounded-lg font-mono focus:ring-2 focus:ring-logo-green-500"
+                                />
+                            </label>
+
+                            <div className="flex justify-end gap-2 pt-2">
+                                <button 
+                                    type="button"
+                                    onClick={() => setEditUserModal({ isOpen: false, user: null, newPin: '' })} 
+                                    className="px-4 py-2 text-slate-500 rounded hover:bg-slate-100"
+                                >
+                                    Cancel
+                                </button>
+                                <button 
+                                    type="submit" 
+                                    className="px-4 py-2 rounded text-white bg-logo-green-600 hover:bg-logo-green-700 font-bold"
+                                >
+                                    Reset PIN
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
