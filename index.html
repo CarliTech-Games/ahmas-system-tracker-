@@ -19,10 +19,9 @@
     <script src="https://unpkg.com/lucide@latest"></script>
 
     <!-- 5. Firebase (Compat Version - CDN for single-file operation) -->
-    <!-- UPDATED to v12.6.0 CDN -->
-    <script src="https://www.gstatic.com/firebasejs/12.6.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/12.6.0/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 
     <!-- 6. Custom Tailwind Config and Styles -->
     <script>
@@ -61,11 +60,6 @@
             animation: spin 1s linear infinite;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        .logo-img {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -85,7 +79,7 @@
             'AS Fortuna'
         ];
         
-        // --- FIREBASE CONFIGURATION (CUSTOMIZABLE FOR EXTERNAL DEPLOYMENT) ---
+        // --- FIREBASE CONFIGURATION ---
         const MANUAL_FIREBASE_CONFIG = {
             apiKey: "AIzaSyAKXcZwKtFBRFvGbOKd0UnQrLuOLt7wV9M",
             authDomain: "ahmas-tracker.firebaseapp.com",
@@ -393,6 +387,63 @@
             );
         };
 
+        // --- Admin Reset User Modal (MOVED OUTSIDE APP TO FIX FOCUS/RENDER BUGS) ---
+        const AdminResetUserModal = ({ editUserModal, setEditUserModal, handleResetPin }) => {
+            if (!editUserModal.isOpen || !editUserModal.user) return null;
+
+            const user = editUserModal.user;
+            
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 fade-in">
+                    <div className="bg-white rounded-xl p-6 w-full max-w-sm">
+                        <h3 className="text-xl font-bold text-logo-green-800 mb-4 flex items-center gap-2">
+                            <Icons.UserCog size={24}/> Reset Staff Credentials
+                        </h3>
+
+                        <div className="bg-slate-50 p-4 rounded-lg mb-4">
+                            <p className="text-xs text-slate-500 uppercase font-bold">Staff Name:</p>
+                            <p className="font-bold text-slate-800 text-lg mb-2">{user.name}</p>
+
+                            <p className="text-xs text-slate-500 uppercase font-bold">Username:</p>
+                            <p className="font-mono text-logo-green-700 text-sm">@{user.username}</p>
+                        </div>
+
+                        <form onSubmit={handleResetPin} className="space-y-4">
+                            <label className="block">
+                                <span className="text-sm font-semibold text-slate-700 block mb-1">Set New PIN (4+ Digits)</span>
+                                <input
+                                    required
+                                    type="password"
+                                    inputMode="numeric"
+                                    maxLength="4"
+                                    value={editUserModal.newPin}
+                                    onChange={(e) => setEditUserModal({ ...editUserModal, newPin: e.target.value })}
+                                    placeholder="Enter new 4-digit PIN"
+                                    className="w-full p-3 border rounded-lg font-mono focus:ring-2 focus:ring-logo-green-500"
+                                />
+                            </label>
+
+                            <div className="flex justify-end gap-2 pt-2">
+                                <button 
+                                    type="button"
+                                    onClick={() => setEditUserModal({ isOpen: false, user: null, newPin: '' })} 
+                                    className="px-4 py-2 text-slate-500 rounded hover:bg-slate-100"
+                                >
+                                    Cancel
+                                </button>
+                                <button 
+                                    type="submit" 
+                                    className="px-4 py-2 rounded text-white bg-logo-green-600 hover:bg-logo-green-700 font-bold"
+                                >
+                                    Reset PIN
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
 
         // --- MAIN APP ---
         const App = () => {
@@ -435,7 +486,7 @@
                 service: '', 
                 therapist: '', 
                 amount: '', 
-                duration: '', 
+                duration: '', // Added Duration
                 type: 'booking', 
                 time: new Date().toTimeString().slice(0, 5),
                 targetBranch: ''
@@ -860,8 +911,6 @@
                 return '';
             };
 
-            // --- FIX: Explicit Handlers without useEffect Loops ---
-            
             const handleServiceChange = (serviceName) => {
                 // Calculate price based on this NEW service + EXISTING duration
                 const newPrice = calculatePrice(serviceName, formData.duration);
@@ -1075,63 +1124,6 @@
 
             // --- RENDER ---
 
-            // Admin Reset User Modal Component (Inner Component)
-            const AdminResetUserModal = ({ editUserModal, setEditUserModal, handleResetPin }) => {
-                if (!editUserModal.isOpen || !editUserModal.user) return null;
-
-                const user = editUserModal.user;
-                
-                return (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 fade-in">
-                        <div className="bg-white rounded-xl p-6 w-full max-w-sm">
-                            <h3 className="text-xl font-bold text-logo-green-800 mb-4 flex items-center gap-2">
-                                <Icons.UserCog size={24}/> Reset Staff Credentials
-                            </h3>
-
-                            <div className="bg-slate-50 p-4 rounded-lg mb-4">
-                                <p className="text-xs text-slate-500 uppercase font-bold">Staff Name:</p>
-                                <p className="font-bold text-slate-800 text-lg mb-2">{user.name}</p>
-
-                                <p className="text-xs text-slate-500 uppercase font-bold">Username:</p>
-                                <p className="font-mono text-logo-green-700 text-sm">@{user.username}</p>
-                            </div>
-
-                            <form onSubmit={handleResetPin} className="space-y-4">
-                                <label className="block">
-                                    <span className="text-sm font-semibold text-slate-700 block mb-1">Set New PIN (4+ Digits)</span>
-                                    <input
-                                        required
-                                        type="password"
-                                        inputMode="numeric"
-                                        maxLength="4"
-                                        value={editUserModal.newPin}
-                                        onChange={(e) => setEditUserModal({ ...editUserModal, newPin: e.target.value })}
-                                        placeholder="Enter new 4-digit PIN"
-                                        className="w-full p-3 border rounded-lg font-mono focus:ring-2 focus:ring-logo-green-500"
-                                    />
-                                </label>
-
-                                <div className="flex justify-end gap-2 pt-2">
-                                    <button 
-                                        type="button"
-                                        onClick={closeEditUserModal} 
-                                        className="px-4 py-2 text-slate-500 rounded hover:bg-slate-100"
-                                    >
-                                        Cancel
-                                    </button>
-                                    <button 
-                                        type="submit" 
-                                        className="px-4 py-2 rounded text-white bg-logo-green-600 hover:bg-logo-green-700 font-bold"
-                                    >
-                                        Reset PIN
-                                    </button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                );
-            };
-
             if (configError) return (
                 <div className="min-h-screen flex flex-col items-center justify-center bg-slate-100 text-center p-4">
                     <div className="bg-white p-8 rounded-xl shadow-lg max-w-md">
@@ -1342,13 +1334,13 @@
                                     <input required placeholder="Client Name*" value={formData.clientName} onChange={e=>setFormData({...formData, clientName:e.target.value})} className="w-full p-3 border rounded-xl bg-slate-50"/>
                                     
                                     <div className="space-y-4">
-                                        {/* Service Dropdown - Fixed */}
+                                        {/* Service Dropdown */}
                                         <select required value={formData.service} onChange={e=>handleServiceChange(e.target.value)} className="w-full p-3 border rounded-xl bg-slate-50 appearance-none">
                                             <option value="" disabled>Select Service*</option>
                                             {servicesList.map(s => <option key={s.id} value={s.name}>{s.name} {s.price ? `(${formatCurrency(s.price)})` : ''}</option>)}
                                         </select>
                                         
-                                        {/* Duration Dropdown - Fixed */}
+                                        {/* Duration Dropdown */}
                                         <select value={formData.duration} onChange={e=>handleDurationChange(e.target.value)} className="w-full p-3 border rounded-xl bg-slate-50 appearance-none">
                                             <option value="" disabled>Select Duration</option>
                                             {durationsList.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
@@ -1504,7 +1496,7 @@
                     </main>
                     {view === 'dashboard' && <button onClick={()=>setView('add')} className="fixed bottom-6 right-6 bg-logo-green-700 text-white p-4 rounded-full shadow-lg hover:scale-105 transition-transform"><Icons.Plus size={28}/></button>}
 
-                    {/* Admin Reset User Modal is rendered inside App component now */}
+                    {/* Admin Reset User Modal */}
                     <AdminResetUserModal 
                         editUserModal={editUserModal} 
                         setEditUserModal={setEditUserModal} 
@@ -1514,68 +1506,6 @@
             );
         };
         
-        // NEW: Admin Reset User Modal Component (Defined outside of the main App function)
-        const AdminResetUserModal = ({ editUserModal, setEditUserModal, handleResetPin }) => {
-            if (!editUserModal.isOpen || !editUserModal.user) return null;
-
-            const user = editUserModal.user;
-            
-            return (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 fade-in">
-                    <div className="bg-white rounded-xl p-6 w-full max-w-sm">
-                        <h3 className="text-xl font-bold text-logo-green-800 mb-4 flex items-center gap-2">
-                            <Icons.UserCog size={24}/> Reset Staff Credentials
-                        </h3>
-
-                        <div className="bg-slate-50 p-4 rounded-lg mb-4">
-                            <p className="text-xs text-slate-500 uppercase font-bold">Staff Name:</p>
-                            <p className="font-bold text-slate-800 text-lg mb-2">{user.name}</p>
-
-                            <p className="text-xs text-slate-500 uppercase font-bold">Username:</p>
-                            <p className="font-mono text-logo-green-700 text-sm">@{user.username}</p>
-                        </div>
-
-                        <form onSubmit={(e) => {
-                            e.preventDefault();
-                            // Call the handler provided by the parent App component
-                            handleResetPin(e);
-                        }} className="space-y-4">
-                            <label className="block">
-                                <span className="text-sm font-semibold text-slate-700 block mb-1">Set New PIN (4+ Digits)</span>
-                                <input
-                                    required
-                                    type="password"
-                                    inputMode="numeric"
-                                    maxLength="4"
-                                    value={editUserModal.newPin}
-                                    onChange={(e) => setEditUserModal({ ...editUserModal, newPin: e.target.value })}
-                                    placeholder="Enter new 4-digit PIN"
-                                    className="w-full p-3 border rounded-lg font-mono focus:ring-2 focus:ring-logo-green-500"
-                                />
-                            </label>
-
-                            <div className="flex justify-end gap-2 pt-2">
-                                <button 
-                                    type="button"
-                                    onClick={() => setEditUserModal({ isOpen: false, user: null, newPin: '' })} 
-                                    className="px-4 py-2 text-slate-500 rounded hover:bg-slate-100"
-                                >
-                                    Cancel
-                                </button>
-                                <button 
-                                    type="submit" 
-                                    className="px-4 py-2 rounded text-white bg-logo-green-600 hover:bg-logo-green-700 font-bold"
-                                >
-                                    Reset PIN
-                                </button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            );
-        };
-
-
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
