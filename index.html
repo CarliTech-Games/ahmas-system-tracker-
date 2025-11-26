@@ -436,7 +436,7 @@
 
                         <form onSubmit={handleResetPin} className="space-y-4">
                             <label className="block">
-                                <span className="text-sm font-semibold text-slate-700 block mb-1">Set New PIN (4+ Digits)</span>
+                                <span className="text-sm font-semibold text-slate-700 block mb-1">Set New PIN (4 Digits)</span>
                                 <input
                                     required
                                     type="password"
@@ -1161,6 +1161,11 @@
                         setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'PIN hashing failed. Check PIN length.', onConfirm: closeModal, confirmColor: 'red' });
                         return;
                     }
+                    
+                    if (newUser.pin.length !== 4) {
+                        setModal({ isOpen: true, type: 'alert', title: 'Policy Check', message: 'Staff and Admin PINs must be exactly 4 digits.', onConfirm: closeModal, confirmColor: 'red' });
+                        return;
+                    }
 
                     if (users.some(u => u.username.toLowerCase() === newUser.username.toLowerCase())) { 
                         setModal({ isOpen: true, type: 'alert', title: 'Username Taken', message: 'This username is already in use.', onConfirm: closeModal, confirmColor: 'red' });
@@ -1231,6 +1236,13 @@
                 setIsGlobalLoading(true);
                 try {
                     if (newPin && newPin.length > 0) {
+                        // Policy Check: Owner 6 digits, Staff/Admin 4 digits
+                        const requiredLen = user.username === 'admin' ? 6 : 4;
+                        if (newPin.length !== requiredLen) {
+                             setModal({ isOpen: true, type: 'alert', title: 'Policy Check', message: `Your PIN must be exactly ${requiredLen} digits.`, onConfirm: closeModal, confirmColor: 'red' });
+                             return;
+                        }
+
                         const hashedPin = await hashPin(newPin);
                         if (!hashedPin) {
                             setModal({ isOpen: true, type: 'alert', title: 'Error', message: 'New PIN hashing failed. Check PIN length.', onConfirm: closeModal, confirmColor: 'red' });
@@ -1262,8 +1274,8 @@
                 const targetUser = editUserModal.user;
                 const newPin = editUserModal.newPin;
 
-                if (newPin.length < 4) {
-                    setModal({ isOpen: true, type: 'alert', title: 'PIN Error', message: 'New PIN must be at least 4 digits.', onConfirm: closeModal, confirmColor: 'red' });
+                if (newPin.length !== 4) {
+                    setModal({ isOpen: true, type: 'alert', title: 'PIN Error', message: 'Staff/Admin PIN must be exactly 4 digits.', onConfirm: closeModal, confirmColor: 'red' });
                     return;
                 }
                 
